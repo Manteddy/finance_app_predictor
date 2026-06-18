@@ -1,0 +1,4 @@
+,rmse,mae,r2,balance_rmse,balance_mae
+baseline_movavg,252.13,131.38,-0.04,252.13,131.38
+linear_ridge,278.42,209.9,-0.27,278.42,209.9
+random_forest,276.67,189.4,-0.25,276.67,189.4
