@@ -27,6 +27,20 @@ def flow_metrics(y_true, y_pred) -> dict:
     }
 
 
+def pinball_loss(y_true, q_pred, alpha) -> float:
+    """Average pinball (quantile) loss — the proper score for a quantile."""
+    y_true = np.asarray(y_true, dtype=float)
+    q_pred = np.asarray(q_pred, dtype=float)
+    diff = y_true - q_pred
+    return float(np.mean(np.maximum(alpha * diff, (alpha - 1) * diff)))
+
+
+def interval_coverage(y_true, lo, hi) -> float:
+    """Fraction of actuals inside [lo, hi] (target ~0.8 for a P10-P90 band)."""
+    y_true = np.asarray(y_true, dtype=float)
+    return float(np.mean((y_true >= np.asarray(lo)) & (y_true <= np.asarray(hi))))
+
+
 def balance_one_step(anchors, true_flows, pred_flows):
     """One-step-ahead balance backtest, re-anchored on the actual balance.
 

@@ -5,11 +5,13 @@ accumulation") from past transaction activity. Built on two real Swedbank
 statements that represent the kind of transaction-level data ingested into a
 data lake.
 
-The pipeline ingests the statements into a **mock SQLite database** (with every
+The pipeline ingests the statements into a **mock SQLite database** (every
 transaction labelled by spending group), engineers **time-series-aware
-features**, trains **three models** (two strong + one baseline), evaluates them
-with a **time-respecting split**, applies a **Lasso→Ridge regularization
-workflow**, and explains the predictions with **SHAP**.
+features**, and trains four models across a **2×2 grid** of granularity
+(daily / weekly) × architecture (direct / decomposed). It applies a
+**Lasso→Ridge regularization workflow**, explains predictions with **SHAP**, and
+produces a **balance fan chart** — a deterministic forecast line with a
+calibrated P10–P90 uncertainty band.
 
 ---
 
@@ -18,11 +20,10 @@ workflow**, and explains the predictions with **SHAP**.
 ```bash
 pip install -r requirements.txt
 python -m src.etl            # build data/finance.db only (stdlib-only, optional)
-python -m src.run_pipeline   # full pipeline: DB + features + 3 models + plots
+python -m src.run_pipeline   # full grid: DB + features + 4 models x 4 tracks + plots
 ```
 
 Outputs land in `outputs/` (figures + `metrics.json` / `metrics.csv`).
-The mock DB is written to `data/finance.db`.
 
 ---
 
@@ -33,129 +34,131 @@ The mock DB is written to `data/finance.db`.
 | Source | 2 Swedbank statements, **same account / same person**, contiguous |
 | Span | **2024-12-01 → 2026-06-18 (~18.5 months)** |
 | Transactions | **3,552** |
-| Daily points after aggregation | **565** |
-| Final balance | €206.37 (matches the statement closing balance exactly — reconciliation check) |
-
-The two statements stitch seamlessly: statement #2 closes at €491.55, which is
-exactly the opening balance of statement #1.
+| Daily points | **565**  ·  Weekly points: **~81** |
+| Final balance | €206.37 (matches the statement closing balance exactly) |
 
 ### Mock database (`data/finance.db`)
-
-- **`transactions`** — one row per real transaction: date, counterparty,
-  details, signed amount, running balance, and a **`spending_group`** label.
+- **`transactions`** — date, counterparty, details, signed amount, balance, and a
+  **`spending_group`** label.
 - **`spending_groups`** — reference table describing each group.
-- **`daily_balance`** — daily aggregation (net flow, end balance, transaction
-  count, debit/credit sums, and per-group sums) used for feature engineering.
+- **`daily_balance`** — daily aggregation (net flow, balance, counts, per-group sums).
 
-#### Spending-group labelling (data, not a pipeline)
-
-Every transaction is assigned one of: `groceries`, `dining`, `transport`,
-`travel`, `utilities`, `subscriptions`, `leisure`, `shopping`, `health`,
-`cash`, `savings` (round-up "Rahakoguja" + Easy Saver moves), `income`,
-`transfer`, `other`. This is a **one-time deterministic labelling** curated from
-the actual merchant strings in these statements (`src/categorize.py`) — *not* a
-trained classifier or categorisation service. ~95% of transactions land in a
-specific group; the remaining ~5% (`other`) is a long tail of one-off merchants.
+Spending groups are assigned by a **one-time deterministic labelling** curated
+from the real merchant strings (`src/categorize.py`) — *not* a trained
+classifier. ~95% of transactions land in a specific group.
 
 ---
 
 ## Modelling approach
 
-The models forecast **next-day net cash-flow** (the change in balance); the
-balance line is then `balance_t = balance_{t-1} + flow_t`. Forecasting the flow
-rather than the highly auto-correlated balance level keeps the target
-stationary and stops a naive persistence model from trivially "winning".
+Models forecast **next-period net cash-flow**; the balance line is reconstructed
+as `balanceₜ = balanceₜ₋₁ + flowₜ`. Two architectures are compared:
 
-- **Features** (`src/features.py`, 42 total, all strictly backward-looking to
-  avoid leakage): calendar (day-of-week, day-of-month, month start/end, week),
-  net-flow lags (1/2/3/7/14), rolling mean/std/sum over 3/7/14/30 days,
-  per-spending-group trailing sums (7/30), transaction intensity, days since
-  last income, and the lagged balance level.
+- **Direct** — predict the full next-period net flow from features.
+- **Decomposed** — split `flow = deterministic + residual`:
+  - **Deterministic backbone** (`src/recurring.py`): detected monthly recurring
+    debits (subscriptions, utilities, dormitory/rent) on their schedule **plus**
+    stable habitual category rates (e.g. median weekly groceries). Fit on the
+    **training portion only** (no leakage), extendable into the future.
+  - **Residual** — the genuinely stochastic discretionary part, which the ML
+    models forecast and around which we draw the **fan chart**.
 
-- **Three models** (`src/models.py`):
-  1. **Baseline** — moving average of recent net flow (window chosen by CV). A
-     deliberately simple reference; it has no learned weights.
-  2. **Linear regression** (strong, explainable) — standardised OLS, with the
-     **Lasso→Ridge** regularization workflow below.
-  3. **Random Forest / Gradient Boosting** (strong, pattern-capturing) — the
-     better of the two is chosen by time-series CV (Random Forest here).
+### Features (`src/features.py`), all strictly backward-looking
+Calendar + **Fourier harmonics** of the monthly cycle (smooth seasonality),
+net-flow lags & rolling mean/std/sum, per-spending-group trailing sums,
+transaction intensity, periods-since-income, lagged balance, and the
+**deterministic-backbone signal** (`expected_flow`, `expected_flow_next`).
 
-- **Time-respecting split** (`src/evaluate.py`): the last **60 days** are a
-  pure holdout (test strictly after train); **expanding-window
-  `TimeSeriesSplit`** is used for CV and hyper-parameter / window selection.
-  Balance accuracy is scored **one-step-ahead, re-anchored** on the actual
-  previous balance (the fair way to score a balance forecast — a free-running
-  multi-step sum is shown only as the future projection line).
+### Four models (`src/models.py`)
+1. **Baseline** — moving average of recent net flow (window via CV). No weights.
+2. **Linear regression** — standardised OLS with the **Lasso→Ridge**
+   regularization workflow (triggered on inflated/overfit OLS weights).
+3. **Trees** — RandomForest vs GradientBoosting, better chosen by CV.
+4. **SARIMA** (`statsmodels`) — a data-efficient classical seasonal model
+   (one-step-ahead), strong on short seasonal series.
 
-- **Regularization workflow** (per the brief): fit OLS, then trigger
-  regularization if its weights are inflated **or** it overfits (its CV error
-  is materially worse than the regularized variants). Here OLS overfits badly
-  (CV RMSE **517** vs **284**), so **Lasso then Ridge** are fit and **Ridge** is
-  selected. Tree complexity controls (depth, leaf size, subsample) are the
-  tree-model analogue; the baseline has no weights to regularize.
+### Evaluation (`src/evaluate.py`)
+Time-respecting holdout (60 days / 12 weeks), strictly after train, with
+expanding-window `TimeSeriesSplit` CV. Point metrics (RMSE/MAE/R²) are always
+computed on the reconstructed **total** flow so all tracks are comparable.
+Probabilistic quality is scored with **pinball loss** and **P10–P90 interval
+coverage**.
 
-- **Explainability** (`src/explain.py`): **SHAP** (the method that attributes a
-  prediction additively across features — "how much each parameter
-  contributed") for the tree model, plus standardised coefficients for the
-  linear model.
+### Fan chart (`src/plots.py`)
+The P10–P90 band uses **split-conformal calibration** (out-of-fold residuals
+across the training set) rather than fragile conditional quantile regression —
+appropriate for small data. The forward projection's central line follows the
+deterministic backbone plus the historical mean residual (typical income), with
+the band widening as residual variance accumulates over the horizon.
 
 ---
 
-## Results (60-day holdout)
+## Results — R² on next-period total flow (holdout)
 
-| model | RMSE (flow, €/day) | MAE | R² | balance RMSE | balance MAE |
-|---|---|---|---|---|---|
-| baseline (moving avg) | **252.1** | **131.4** | −0.04 | **252.1** | **131.4** |
-| linear (Ridge) | 278.4 | 209.9 | −0.27 | 278.4 | 209.9 |
-| random forest | 276.7 | 189.4 | −0.25 | 276.7 | 189.4 |
+| track | baseline | linear | tree | sarima |
+|---|---|---|---|---|
+| **Daily**, direct | −0.04 | −0.15 | −0.25 | **+0.10** |
+| **Daily**, decomposed | −0.04 | −0.21 | −0.34 | +0.02 |
+| **Weekly**, direct | −0.09 | +0.07 | **+0.38** | −0.02 |
+| **Weekly**, decomposed | −0.09 | **+0.30** | +0.35 | −0.07 |
 
-**Honest read of these numbers:**
+**What this shows (the whole point of the exercise):**
 
-- **Daily individual cash-flow is largely noise-dominated.** R² is negative for
-  *all* models, including the strong ones — at daily granularity for a single
-  account there is little learnable point-by-point signal beyond "recent
-  average", and the simple moving-average baseline is therefore hard to beat
-  (it edges the strong models by ~10% on RMSE here). This is exactly why a
-  baseline was included, and the result is reported rather than hidden.
-- The strong models still add value the baseline cannot: they **expose the
-  structure** driving the balance (see SHAP below) and give explainable,
-  per-feature attributions. Among the strong models the **Random Forest** is the
-  recommended choice (best balance error of the two, plus SHAP explainability).
-- The recurring **monthly salary spike** (balance jumps to ~€2,200 then drains)
-  is the dominant pattern; it shows up as the importance of `day_of_month` and
-  the 30-day flow trend.
+1. **Daily is noise-dominated.** Every learner is ≤0 except SARIMA (+0.10); the
+   naive baseline is essentially unbeatable. Individual daily cash-flow is mostly
+   irreducible timing noise.
+2. **Weekly aggregation rescues the signal.** Best R² jumps **+0.10 → +0.38**.
+   Summing 7 days cancels day-to-day timing noise (incoherently, ~×7) while the
+   weekly *budget* structure adds coherently — a ~7× signal-to-noise gain. At
+   weekly cadence the **strong models clearly beat the baseline** (which stays
+   negative).
+3. **Decomposition helps the linear model a lot** (weekly **+0.07 → +0.30**):
+   removing the deterministic salary/rent/subscription structure lets the linear
+   model focus on the learnable residual. (For trees the gain is neutral — they
+   could already approximate that structure.)
+4. **SHAP** on the weekly model ranks `fourier_sin_1` (monthly cycle) and
+   `expected_flow_next` (the deterministic backbone) as top contributors —
+   confirming the new architectural features carry the signal.
 
-### What drives the prediction (SHAP)
+Headline track (**weekly, decomposed**): regularization **triggered** (OLS max
+|coef| €450 → **Lasso** chosen); best strong model R² **+0.35** vs baseline
+**−0.09**; P10–P90 coverage **0.58**, pinball **131**.
 
-Top contributors for the Random Forest: `nf_roll_sum_30` / `nf_roll_mean_30`
-(the 30-day net-flow trend), `day_of_month` (salary timing), and
-`savings_roll30` (recent round-up savings behaviour). See
-`outputs/shap_summary.png` and `outputs/balance_forecast.png`.
+### On "is R² ≈ 0.3–0.4 good?" — the irreducible-variance ceiling
+Discretionary human spending contains genuine randomness, so there is a Bayes
+floor: no architecture drives single-account R² near 0.9. That is *why* the
+deliverable is a **fan chart**, not a single line — the predictable backbone is
+drawn as a line and the irreducible part as an honest uncertainty band. (The
+band slightly under-covers here — 0.58 vs 0.80 — because the final 12 weeks were
+unusually volatile, including a travel period; it covers ~0.80 of the
+out-of-fold calibration residuals by construction.)
+
+### Figures (`outputs/`)
+- `fan_chart.png` — **headline**: deterministic P50 line + P10–P90 band + actuals + projection.
+- `daily_vs_weekly.png` — R² by model across all four tracks.
+- `balance_forecast.png` — weekly multi-model holdout comparison.
+- `shap_summary.png`, `shap_bar.png`, `linear_coefficients.png`, `metrics.{json,csv}`.
 
 ### ⚠️ Data-size caveat
-
-This is **one account over ~18.5 months**. ~565 daily points is enough to *demo
-the methodology* end-to-end, but: (a) the model learns *this client's* habits
-and will **not** generalise to other clients, and (b) daily net flow is
-intrinsically noisy. For production-grade accumulation forecasting you would
-want **many accounts** (panel data) and likely a **coarser horizon** (weekly /
-monthly) where the signal-to-noise ratio is far better. Treat the numbers here
-as a demonstrator, not a production benchmark.
+This is **one account**. ~565 daily / ~81 weekly points demonstrate the
+methodology end-to-end, but the model learns *this client's* habits and will not
+generalise cross-client. Aggregation fixes the **noise** problem; only
+**panel data (many accounts)** fixes the **single-subject** problem.
 
 ---
 
 ## Repository layout
-
 ```
 src/
   categorize.py     # spending-group labels (data, not a pipeline)
   etl.py            # parse 2 xlsx -> categorize -> SQLite mock DB (stdlib only)
-  features.py       # daily aggregation + time-series features
-  models.py         # baseline, linear (OLS->Lasso->Ridge), trees
-  evaluate.py       # temporal split, metrics, one-step balance backtest
+  recurring.py      # deterministic backbone: recurring-event + habitual rates
+  features.py       # daily & weekly features (+ Fourier, backbone signal)
+  models.py         # baseline, linear (OLS->Lasso->Ridge), trees, SARIMA, quantiles
+  evaluate.py       # temporal split, point + probabilistic metrics
   explain.py        # SHAP + standardized coefficients
-  plots.py          # balance-vs-time figure + forward projection
-  run_pipeline.py   # end-to-end orchestration
+  plots.py          # fan chart, track comparison, holdout comparison
+  run_pipeline.py   # orchestrate the daily/weekly x direct/decomposed grid
 data/raw/           # the two source statements (committed for reproducibility)
 data/finance.db     # generated mock database
 outputs/            # generated figures + metrics

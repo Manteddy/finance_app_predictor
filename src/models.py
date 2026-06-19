@@ -35,14 +35,16 @@ class MovingAverageBaseline:
 
     def fit(self, X, y):
         # The trailing-mean features are precomputed; pick the window whose
-        # corresponding feature best predicts y on expanding CV folds.
-        candidates = [3, 7, 14, 30]
-        tscv = TimeSeriesSplit(n_splits=5)
+        # corresponding feature best predicts y on expanding CV folds. Windows
+        # are discovered from the feature columns so this works at any freq.
+        candidates = sorted(
+            int(c.rsplit("_", 1)[1]) for c in X.columns
+            if c.startswith("nf_roll_mean_")
+        )
+        tscv = TimeSeriesSplit(n_splits=min(5, max(2, len(X) // 10)))
         best_w, best_rmse = candidates[0], np.inf
         for w in candidates:
             col = f"nf_roll_mean_{w}"
-            if col not in X.columns:
-                continue
             rmses = []
             for _, te in tscv.split(X):
                 pred = X.iloc[te][col].values
@@ -134,3 +136,35 @@ def select_best_tree(X, y):
     results = {name: _cv_rmse(m, X, y) for name, m in build_tree_models().items()}
     best = min(results, key=results.get)
     return best, build_tree_models()[best], results
+
+
+# --------------------------------------------------------------------------- #
+# Classical seasonal model (4th contender)
+# --------------------------------------------------------------------------- #
+def sarima_one_step(train_series, full_series, test_index, freq):
+    """One-step-ahead SARIMA forecast over the holdout.
+
+    Params are estimated on the training series, then applied (filtered) to the
+    full series so ``get_prediction(dynamic=False)`` yields genuine
+    one-step-ahead predictions on the test period (each uses the *actual* past).
+    A data-efficient structural model well-suited to short seasonal series.
+    Returns (point, lower, upper) aligned to ``test_index``.
+    """
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+    m = 7 if freq == "D" else 4  # weekly seasonality (daily) / monthly (weekly)
+    order, seasonal = (1, 1, 1), (1, 0, 0, m)
+    try:
+        fitted = SARIMAX(train_series, order=order, seasonal_order=seasonal,
+                         enforce_stationarity=False,
+                         enforce_invertibility=False).fit(disp=False)
+        applied = fitted.apply(full_series, refit=False)
+        pred = applied.get_prediction(start=test_index[0], dynamic=False)
+        mean = pred.predicted_mean.reindex(test_index)
+        ci = pred.conf_int(alpha=0.2).reindex(test_index)  # 80% interval
+        return mean.values, ci.iloc[:, 0].values, ci.iloc[:, 1].values
+    except Exception as exc:  # pragma: no cover - robustness on tiny series
+        print(f"  [sarima] fell back to flat forecast: {exc}")
+        last = float(train_series.iloc[-1])
+        n = len(test_index)
+        return np.full(n, last), np.full(n, last), np.full(n, last)

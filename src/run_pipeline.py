@@ -1,5 +1,9 @@
-"""End-to-end pipeline: ETL -> features -> train 3 models -> evaluate ->
-regularization workflow -> explainability -> plots + metrics.
+"""End-to-end pipeline.
+
+Runs a 2x2 grid of tracks — {daily, weekly} x {direct, decomposed} — across four
+models (moving-average baseline, linear w/ Lasso->Ridge workflow, trees,
+SARIMA), compares them on the reconstructed *total* next-period flow and balance,
+and produces the headline **balance fan chart** for the weekly decomposed track.
 
 Run with:  python -m src.run_pipeline
 """
@@ -12,184 +16,233 @@ import os
 import numpy as np
 import pandas as pd
 
-from . import etl, evaluate, explain, models, plots
-from .features import build_features, load_daily
+from . import etl, evaluate, explain, models, plots, recurring
+from .features import aggregate, build_features, load_daily
 
 OUT_DIR = "outputs"
-# On standardized features, a coefficient larger than this (in target units of
-# EUR/day) flags an inflated/unstable OLS fit and triggers regularization.
-COEF_TRIGGER = 150.0
+COEF_TRIGGER = 150.0            # |std coef| (EUR) that flags an inflated OLS fit
+TEST_PERIODS = {"D": 60, "W": 12}
+HORIZON = {"D": 30, "W": 8}
+Z80 = 1.2816
+
+
+def _select_linear(Xtr, ytr):
+    """Run the OLS -> Lasso -> Ridge regularization workflow; return chosen fit."""
+    lin_models = models.build_linear_models()
+    max_coef = models.ols_max_abs_coef(lin_models["linear_ols"], Xtr, ytr)
+    cv = {n: models._cv_rmse(m, Xtr, ytr) for n, m in lin_models.items()}
+    best_reg = min(cv["linear_lasso"], cv["linear_ridge"])
+    regularize = (max_coef > COEF_TRIGGER) or (cv["linear_ols"] > 1.15 * best_reg)
+    if regularize:
+        chosen = min(["linear_lasso", "linear_ridge"], key=cv.get)
+    else:
+        chosen = min(cv, key=cv.get)
+    return chosen, lin_models[chosen].fit(Xtr, ytr), max_coef, regularize, cv
+
+
+def run_track(daily, tx, freq, mode):
+    """Train + evaluate one (granularity, mode) track. Returns (rows, artifacts)."""
+    df = aggregate(daily, freq)
+    n_test = TEST_PERIODS[freq]
+    cutoff = df.index[-n_test]                     # first test period (train < cutoff)
+
+    decomposed = mode == "decomposed"
+    deterministic = None
+    if decomposed:
+        rules = recurring.detect_recurring(tx, cutoff)
+        habitual = recurring.habitual_rates(daily, cutoff, freq)
+        # Deterministic backbone over history + future horizon.
+        future_idx = pd.date_range(df.index[-1], periods=HORIZON[freq] + 1,
+                                   freq=freq)[1:]
+        ext_idx = df.index.append(future_idx)
+        deterministic = recurring.build_deterministic(ext_idx, rules, habitual, freq)
+
+    target_mode = "residual" if decomposed else "total"
+    X, y, frame = build_features(df, freq, target_mode, deterministic)
+    (Xtr, ytr, ftr), (Xte, yte, fte) = evaluate.temporal_split(X, y, frame,
+                                                               test_days=n_test)
+
+    # Predicted *periods* and the actual total flow / balance anchors there.
+    pos = df.index.get_indexer(fte.index)
+    target_periods = df.index[pos + 1]
+    anchors = fte["end_balance"].values
+    actual_total = fte["total_next"].values
+    det_next = fte["det_next"].values
+    ytr_total = ftr["total_next"]                   # baseline always targets total
+
+    def to_total(pred):                             # residual -> total flow
+        return det_next + pred if decomposed else pred
+
+    rows, pred_totals = [], {}
+
+    # ---- baseline (naive total-flow moving average, identical in both modes) --
+    base = models.MovingAverageBaseline().fit(Xtr, ytr_total)
+    pred_totals["baseline"] = base.predict(Xte)
+
+    # ---- linear (regularization workflow) ------------------------------------
+    lin_name, lin, max_coef, regularize, lin_cv = _select_linear(Xtr, ytr)
+    pred_totals["linear"] = to_total(lin.predict(Xte))
+
+    # ---- trees ---------------------------------------------------------------
+    tree_name, tree_model, tree_cv = models.select_best_tree(Xtr, ytr)
+    tree = tree_model.fit(Xtr, ytr)
+    pred_totals["tree"] = to_total(tree.predict(Xte))
+
+    # ---- SARIMA (on total or residual series, one-step-ahead) ----------------
+    series = df["net_flow"].copy()
+    if decomposed:
+        series = series - deterministic.reindex(df.index)
+    sar_mean, sar_lo, sar_hi = models.sarima_one_step(
+        series[series.index < target_periods[0]], series, target_periods, freq)
+    pred_totals["sarima"] = (det_next + sar_mean) if decomposed else sar_mean
+
+    # ---- metrics for every model (on reconstructed TOTAL flow + balance) -----
+    for name, pt in pred_totals.items():
+        fm = evaluate.flow_metrics(actual_total, pt)
+        bm, _, _ = evaluate.balance_one_step(anchors, actual_total, pt)
+        rows.append({"track": f"{freq}-{mode}", "freq": freq, "mode": mode,
+                     "model": name, **fm, **bm})
+
+    # ---- residual fan via split-conformal calibration ------------------------
+    # Conditional quantile regression is unreliable on ~56 weekly points, so we
+    # build the P10/P90 band from out-of-sample residuals on a calibration slice
+    # of the training data (split conformal => ~80% marginal coverage). The tree
+    # provides the P50 point; offsets widen it to the calibrated band.
+    from sklearn.base import clone
+    from sklearn.model_selection import TimeSeriesSplit
+    oof_err = []
+    for tr_idx, va_idx in TimeSeriesSplit(n_splits=5).split(Xtr):
+        m = clone(tree_model).fit(Xtr.iloc[tr_idx], ytr.iloc[tr_idx])
+        oof_err.extend(ytr.iloc[va_idx].values - m.predict(Xtr.iloc[va_idx]))
+    off10, off90 = np.percentile(oof_err, 10), np.percentile(oof_err, 90)
+
+    flow_p50 = pred_totals["tree"]
+    flow_p10, flow_p90 = flow_p50 + off10, flow_p50 + off90
+    pinball = float(np.mean([
+        evaluate.pinball_loss(actual_total, flow_p10, 0.1),
+        evaluate.pinball_loss(actual_total, flow_p50, 0.5),
+        evaluate.pinball_loss(actual_total, flow_p90, 0.9)]))
+    coverage = evaluate.interval_coverage(actual_total, flow_p10, flow_p90)
+    for r in rows:
+        if r["model"] == "tree":
+            r["pinball"], r["coverage"] = round(pinball, 2), round(coverage, 3)
+
+    artifacts = {
+        "df": df, "freq": freq, "deterministic": deterministic,
+        "target_periods": target_periods, "anchors": anchors,
+        "actual_total": actual_total,
+        "pred_totals": pred_totals,
+        "flow_p10": flow_p10, "flow_p50": flow_p50, "flow_p90": flow_p90,
+        "Xtr": Xtr, "Xte": Xte, "tree": tree, "tree_name": tree_name,
+        "lin": lin, "lin_name": lin_name, "feature_names": list(X.columns),
+        "max_coef": max_coef, "regularize": regularize,
+        "n_train": len(Xtr), "n_test": len(Xte),
+    }
+    return rows, artifacts
 
 
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    # ---------------------------------------------------------------- ETL ---
     summary = etl.build_database()
-    print("=" * 70)
-    print("ETL — mock database built")
-    print(f"  {summary['n_transactions']} transactions, {summary['n_days']} days, "
-          f"{summary['date_range'][0]} .. {summary['date_range'][1]}")
-    print(f"  final reconstructed balance: EUR {summary['final_balance']:.2f} "
-          f"(statement closing = 206.37)")
+    print("=" * 72)
+    print(f"ETL: {summary['n_transactions']} txns, {summary['n_days']} days, "
+          f"{summary['date_range'][0]}..{summary['date_range'][1]}, "
+          f"final balance EUR {summary['final_balance']:.2f}")
 
-    # ----------------------------------------------------------- features ---
     daily = load_daily()
-    X, y, frame = build_features(daily)
-    print(f"\nFeature matrix: {X.shape[0]} samples x {X.shape[1]} features")
+    tx = recurring.load_transactions()
 
-    (Xtr, ytr, ftr), (Xte, yte, fte) = evaluate.temporal_split(X, y, frame,
-                                                               test_days=60)
-    print(f"Train: {Xtr.index.min().date()} .. {Xtr.index.max().date()} "
-          f"({len(Xtr)})   Test: {Xte.index.min().date()} .. "
-          f"{Xte.index.max().date()} ({len(Xte)})")
+    all_rows, artifacts = [], {}
+    for freq in ("D", "W"):
+        for mode in ("direct", "decomposed"):
+            rows, art = run_track(daily, tx, freq, mode)
+            all_rows.extend(rows)
+            artifacts[(freq, mode)] = art
 
-    # Anchors = actual balance on each holdout day; one-step-ahead predicted
-    # balance = anchor + predicted next-day flow. Target days are the days the
-    # flows land on (the day after each feature row).
-    anchors = fte["end_balance"].values
-    target_dates = fte.index + pd.Timedelta(days=1)
-    actual_test_flows = yte.values
+    comp = pd.DataFrame(all_rows)
+    print("\n" + "=" * 72)
+    print("MODEL COMPARISON — next-period TOTAL flow (holdout). Higher R² better.")
+    print("=" * 72)
+    show = comp[["track", "model", "rmse", "mae", "r2", "balance_rmse"]].copy()
+    print(show.round(2).to_string(index=False))
 
-    results = {}        # name -> metrics
-    test_flows = {}     # short-name -> predicted flows on holdout
+    # Headline track: weekly decomposed.
+    head = artifacts[("W", "decomposed")]
+    freq = head["freq"]
+    det = head["deterministic"]
+    future_idx = det.index[det.index > head["df"].index[-1]]
+    det_future = det.loc[future_idx]
+    sigma_resid = float(np.std(head["actual_total"] - head["flow_p50"]))
+    last_balance = head["df"]["end_balance"].iloc[-1]
+    # Historical mean residual (= typical net of irregular income the
+    # deterministic backbone omits) anchors the projection's central line.
+    resid_hist = head["df"]["net_flow"] - det.reindex(head["df"].index)
+    drift = float(resid_hist.dropna().mean())
+    projection = plots.project_fan(det_future, last_balance, sigma_resid,
+                                   HORIZON[freq], drift=drift)
 
-    # ---------------------------------------------------------- baseline ---
-    base = models.MovingAverageBaseline().fit(Xtr, ytr)
-    base_pred = base.predict(Xte)
-    bm = evaluate.flow_metrics(yte, base_pred)
-    bbal, _, _ = evaluate.balance_one_step(anchors, actual_test_flows, base_pred)
-    results["baseline_movavg"] = {**bm, **bbal, "note": f"window={base.window}"}
-    test_flows["baseline"] = base_pred
+    hist = head["df"].iloc[-(head["n_test"] + 26):][["end_balance"]]
+    plots.plot_fan_chart(
+        head["target_periods"], head["anchors"], head["actual_total"],
+        head["flow_p10"], head["flow_p50"], head["flow_p90"], projection,
+        os.path.join(OUT_DIR, "fan_chart.png"), history_tail=hist,
+        title="Weekly balance forecast — deterministic line + P10–P90 fan")
 
-    # ----------------------------------- linear family + regularization ---
-    lin_models = models.build_linear_models()
-    max_coef = models.ols_max_abs_coef(lin_models["linear_ols"], Xtr, ytr)
-    linear_cv = {name: models._cv_rmse(m, Xtr, ytr) for name, m in lin_models.items()}
-    best_reg_cv = min(linear_cv["linear_lasso"], linear_cv["linear_ridge"])
+    # Multi-model holdout comparison (weekly decomposed).
+    plots.plot_balance_forecast(
+        head["target_periods"], head["anchors"], head["actual_total"],
+        head["pred_totals"], os.path.join(OUT_DIR, "balance_forecast.png"),
+        history_tail=hist, title="Weekly balance: actual vs models (holdout)")
 
-    # Regularize if OLS weights are inflated OR OLS overfits (its CV error is
-    # materially worse than the regularized variants) — both signal that the
-    # strong linear model is leaning on unstable weights.
-    coef_high = max_coef > COEF_TRIGGER
-    overfit = linear_cv["linear_ols"] > 1.15 * best_reg_cv
-    regularize = coef_high or overfit
-    print(f"\nOLS max |standardized coef| = {max_coef:.1f} EUR/day "
-          f"(threshold {COEF_TRIGGER:.0f}); OLS CV RMSE {linear_cv['linear_ols']:.0f} "
-          f"vs best regularized {best_reg_cv:.0f}")
-    print(f"  -> regularization {'TRIGGERED' if regularize else 'not needed'} "
-          f"(high_weights={coef_high}, overfit={overfit}); applying Lasso then Ridge")
-    print("  linear CV RMSE:", {k: round(v, 2) for k, v in linear_cv.items()})
+    # Daily-vs-weekly R² comparison.
+    plots.plot_track_comparison(comp, os.path.join(OUT_DIR, "daily_vs_weekly.png"))
 
-    # Choose the linear representative: if OLS weights are inflated, prefer the
-    # best regularized variant (Lasso first, then Ridge); else best overall.
-    if regularize:
-        order = ["linear_lasso", "linear_ridge", "linear_ols"]
-        chosen_linear = min(["linear_lasso", "linear_ridge"], key=linear_cv.get)
-    else:
-        chosen_linear = min(linear_cv, key=linear_cv.get)
-    print(f"  chosen linear model: {chosen_linear}")
-
-    lin = lin_models[chosen_linear].fit(Xtr, ytr)
-    lin_pred = lin.predict(Xte)
-    lm = evaluate.flow_metrics(yte, lin_pred)
-    lbal, _, _ = evaluate.balance_one_step(anchors, actual_test_flows, lin_pred)
-    results[chosen_linear] = {**lm, **lbal, "cv_rmse": round(linear_cv[chosen_linear], 2)}
-    test_flows["linear"] = lin_pred
-
-    # ------------------------------------------------------------- trees ---
-    best_tree_name, tree_model, tree_cv = models.select_best_tree(Xtr, ytr)
-    print("\nTree CV RMSE:", {k: round(v, 2) for k, v in tree_cv.items()},
-          "-> chosen:", best_tree_name)
-    tree = tree_model.fit(Xtr, ytr)
-    tree_pred = tree.predict(Xte)
-    tm = evaluate.flow_metrics(yte, tree_pred)
-    tbal, _, _ = evaluate.balance_one_step(anchors, actual_test_flows, tree_pred)
-    results[best_tree_name] = {**tm, **tbal, "cv_rmse": round(tree_cv[best_tree_name], 2)}
-    test_flows["tree"] = tree_pred
-
-    # ------------------------------------------------ comparison table ---
-    print("\n" + "=" * 70)
-    print("MODEL COMPARISON  (holdout, lower RMSE/MAE is better)")
-    print("=" * 70)
-    comp = pd.DataFrame(results).T[["rmse", "mae", "r2", "balance_rmse", "balance_mae"]]
-    comp = comp.astype(float).round(2)
-    print(comp.to_string())
-
-    strong = comp.drop(index="baseline_movavg")
-    winner = strong["balance_rmse"].idxmin()
-    base_bal_rmse = comp.loc["baseline_movavg", "balance_rmse"]
-    win_bal_rmse = comp.loc[winner, "balance_rmse"]
-    improvement = 100 * (base_bal_rmse - win_bal_rmse) / base_bal_rmse
-    print(f"\nBest model by balance RMSE: {winner} "
-          f"(EUR {win_bal_rmse:.2f} vs baseline EUR {base_bal_rmse:.2f}, "
-          f"{improvement:+.1f}% vs baseline)")
-
-    # ---------------------------------------------------- explainability ---
-    print("\nExplainability:")
-    shap_rank = explain.shap_tree(tree, Xtr, Xte,
+    # Explainability on the headline tree model.
+    shap_rank = explain.shap_tree(head["tree"], head["Xtr"], head["Xte"],
                                   os.path.join(OUT_DIR, "shap_summary.png"))
     explain.plot_importance_bar(shap_rank, "mean_abs_shap",
-                                f"SHAP contribution — {best_tree_name}",
+                                f"SHAP — weekly {head['tree_name']} (residual)",
                                 os.path.join(OUT_DIR, "shap_bar.png"))
-    print("  top tree-model contributors (mean |SHAP|):")
-    print(shap_rank.head(8).to_string(index=False))
-
-    lin_rank = explain.linear_contributions(lin, X.columns)
+    lin_rank = explain.linear_contributions(head["lin"], head["feature_names"])
     explain.plot_importance_bar(lin_rank, "abs_coef",
-                                f"Standardized coefficients — {chosen_linear}",
+                                f"Standardized coefficients — {head['lin_name']}",
                                 os.path.join(OUT_DIR, "linear_coefficients.png"))
 
-    # ---------------------------------------------------- balance figure ---
-    final_model = tree if winner == best_tree_name else lin
-    projections = {
-        "tree" if winner == best_tree_name else "linear":
-            plots.project_future(final_model, daily, horizon=30),
-        "baseline": _baseline_projection(daily, base.window, horizon=30),
-    }
-    plots.plot_balance_forecast(
-        target_dates, anchors, actual_test_flows, test_flows, projections,
-        os.path.join(OUT_DIR, "balance_forecast.png"),
-        history_tail=daily.iloc[-(len(Xte) + 90):][["end_balance"]],
-    )
+    # ---- narrative summary -------------------------------------------------
+    print("\n" + "-" * 72)
+    best_daily = comp[comp["freq"] == "D"].set_index(["mode", "model"])["r2"]
+    best_weekly = comp[comp["freq"] == "W"].set_index(["mode", "model"])["r2"]
+    print(f"Weekly lifts R²: daily best {best_daily.max():+.3f} -> "
+          f"weekly best {best_weekly.max():+.3f}")
+    wd = comp[(comp["freq"] == "W") & (comp["mode"] == "decomposed")].set_index("model")
+    base_r2 = wd.loc["baseline", "r2"]
+    strong = wd.drop(index="baseline")["r2"].max()
+    print(f"Weekly-decomposed: baseline R² {base_r2:+.3f} vs best strong "
+          f"{strong:+.3f}  |  P10–P90 coverage "
+          f"{wd.loc['tree', 'coverage']:.2f} (target ~0.80), "
+          f"pinball {wd.loc['tree', 'pinball']:.1f}")
 
-    # ------------------------------------------------------ persist ---
     out = {
-        "data": {
-            "n_transactions": summary["n_transactions"],
-            "n_days": summary["n_days"],
-            "date_range": summary["date_range"],
-            "final_balance": summary["final_balance"],
+        "data": {k: summary[k] for k in
+                 ("n_transactions", "n_days", "date_range", "final_balance")},
+        "tracks": comp.round(3).to_dict(orient="records"),
+        "headline": {
+            "track": "W-decomposed",
+            "regularization_triggered": bool(head["regularize"]),
+            "ols_max_abs_coef": round(head["max_coef"], 2),
+            "chosen_linear": head["lin_name"], "chosen_tree": head["tree_name"],
+            "coverage_p10_p90": round(float(wd.loc["tree", "coverage"]), 3),
+            "pinball": round(float(wd.loc["tree", "pinball"]), 2),
+            "n_train": head["n_train"], "n_test": head["n_test"],
         },
-        "split": {"train": len(Xtr), "test": len(Xte)},
-        "regularization_triggered": bool(regularize),
-        "ols_max_abs_coef": round(max_coef, 2),
-        "chosen_linear": chosen_linear,
-        "chosen_tree": best_tree_name,
-        "winner": winner,
-        "improvement_vs_baseline_pct": round(improvement, 1),
-        "metrics": {k: {kk: round(float(vv), 3) for kk, vv in v.items()
-                        if isinstance(vv, (int, float))} for k, v in results.items()},
         "top_shap_features": shap_rank.head(10).to_dict(orient="records"),
     }
     with open(os.path.join(OUT_DIR, "metrics.json"), "w") as f:
-        json.dump(out, f, indent=2)
-    comp.to_csv(os.path.join(OUT_DIR, "metrics.csv"))
+        json.dump(out, f, indent=2, default=float)
+    comp.round(3).to_csv(os.path.join(OUT_DIR, "metrics.csv"), index=False)
     print(f"\nSaved figures + metrics to {OUT_DIR}/")
     return out
-
-
-def _baseline_projection(daily, window, horizon=30):
-    """Flat-drift projection: future daily flow = mean of last `window` days."""
-    flow = daily["net_flow"].tail(window).mean()
-    balance = daily["end_balance"].iloc[-1]
-    dates, bals = [], []
-    for _ in range(horizon):
-        balance += flow
-        d = (dates[-1] if dates else daily.index[-1]) + pd.Timedelta(days=1)
-        dates.append(d)
-        bals.append(balance)
-    return pd.DataFrame({"net_flow": flow, "end_balance": bals}, index=dates)
 
 
 if __name__ == "__main__":
