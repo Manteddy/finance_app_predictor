@@ -339,6 +339,17 @@
     "n_train": 58,
     "n_test": 12
   },
+  "fan_width_eur": {
+    "old_broken_p10_p90": 1046.6,
+    "old_coverage": 0.667,
+    "new_calm_week": 1122.3,
+    "new_median": 1602.9,
+    "new_volatile_week": 1968.7,
+    "new_coverage": 0.917,
+    "method": "prequential calibration + bounded adaptive conformal",
+    "point_model": "linear",
+    "note": "routing own-account flows out was tried but backfires (compensatory)"
+  },
   "top_shap_features": [
     {
       "feature": "expected_flow_next",

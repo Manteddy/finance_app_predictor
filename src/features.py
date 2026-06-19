@@ -43,6 +43,29 @@ def load_daily(db_path: str = "data/finance.db") -> pd.DataFrame:
     return df.set_index("date")
 
 
+def to_core(daily: pd.DataFrame) -> pd.DataFrame:
+    """Return a 'spendable cash' view that routes own-account flows out.
+
+    NOTE: this was an explored width-reduction lever that **backfires** and is NOT
+    used by the headline. Empirically the ``savings`` group (Rahakoguja round-ups,
+    Easy Saver, transfers between own accounts) is *compensatory* — the client
+    tops up from savings when spending spikes — so it has negative covariance with
+    net flow and removing it *raises* variance (target std 438 -> 763). Kept for
+    reference / experimentation; see REPORT.md.
+
+    Subtracts savings from net flow, recomputes the balance as the cumulative core
+    flow from the opening balance, and zeroes grp_savings to avoid double counting.
+    """
+    df = daily.copy()
+    savings = df["grp_savings"] if "grp_savings" in df.columns else 0.0
+    opening = float(df["end_balance"].iloc[0] - df["net_flow"].iloc[0])
+    df["net_flow"] = df["net_flow"] - savings
+    df["end_balance"] = opening + df["net_flow"].cumsum()
+    if "grp_savings" in df.columns:
+        df["grp_savings"] = 0.0
+    return df
+
+
 def aggregate(daily: pd.DataFrame, freq: str) -> pd.DataFrame:
     """Return the series at the requested granularity ('D' or 'W')."""
     if freq == "D":

@@ -88,15 +88,27 @@ computed on the reconstructed **total** flow so all tracks are comparable.
 Probabilistic quality is scored with **pinball loss** and **P10–P90 interval
 coverage**.
 
-### Fan chart (`src/plots.py`)
-The uncertainty band uses **split-conformal calibration** (out-of-fold residuals
-across the training set) rather than fragile conditional quantile regression —
-appropriate for small data. It is rendered as a **gradient** of nested central
-intervals (50→95%), darker near the P50 line. The forward projection is a
-**recursive, model-driven** forecast (so it carries week-level texture from
-lags/Fourier, not just a flat monthly sawtooth), and it **starts exactly where
-the actual line ends** (an anchor point joins the two); the band widens as
-residual variance accumulates over the horizon.
+### Fan chart (`src/plots.py`, `src/conformal.py`)
+The uncertainty band is an **adaptive normalized conformal** interval
+(`src/conformal.py`): calibrated on **prequential** (online) residuals — which
+fixed a bug where expanding-CV's tiny early folds inflated the margin *and* let it
+under-cover (0.67) — and scaled by a **bounded local-volatility multiplier** so it
+is **tight in calm weeks and wide only in volatile ones**. It is rendered as a
+**gradient** of nested intervals (50→95%, darker near P50). The forward projection
+is a **Monte-Carlo** simulation (recursive, model-driven), so it carries
+week-level texture plus the monthly salary; it **starts exactly where the actual
+line ends** and widens with horizon.
+
+**Two width-reduction levers were tried (see [REPORT.md](REPORT.md)):**
+- **Adaptive intervals** ✅ — calm-week 80% band ≈ €1.1k vs volatile ≈ €2.0k, and
+  honest coverage (~0.9 vs the old 0.67).
+- **Routing own-account flows out** ❌ — it *backfires*: savings/Easy-Saver
+  transfers are **compensatory** (the client tops up from savings when spending
+  spikes), so removing them *raises* variance. Reverted; documented.
+
+The remaining width is largely **irreducible** for a single account over a
+volatile period — the decisive lever is **data** (more clients, all accounts per
+client, longer history), detailed in **[REPORT.md](REPORT.md)**.
 
 ---
 
@@ -204,11 +216,13 @@ src/
   etl.py            # parse 2 xlsx -> categorize -> SQLite mock DB (stdlib only)
   recurring.py      # deterministic backbone: recurring-event + habitual rates
   features.py       # daily & weekly features (+ Fourier, backbone signal)
-  models.py         # baseline, linear (OLS->Lasso->Ridge), trees, SARIMA, quantiles
+  models.py         # baseline, linear (OLS->Lasso->Ridge), trees, SARIMA
+  conformal.py      # adaptive normalized-conformal prediction intervals
   evaluate.py       # temporal split, point + probabilistic metrics
   explain.py        # SHAP + standardized coefficients
   plots.py          # fan chart, track comparison, holdout comparison
   run_pipeline.py   # orchestrate the daily/weekly x direct/decomposed grid
+REPORT.md           # data strategy: narrowing the fan + cross-client generalisation
 data/raw/           # the two source statements (committed for reproducibility)
 data/finance.db     # generated mock database
 outputs/            # generated figures + metrics
