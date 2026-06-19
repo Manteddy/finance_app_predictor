@@ -26,8 +26,10 @@ import pandas as pd
 
 # Everyday categories with a roughly stable per-period spend rate.
 HABITUAL_GROUPS = ["groceries", "dining", "transport"]
-# Groups that contain fixed, scheduled, recurring debits worth detecting.
-RECURRING_GROUPS = ["subscriptions", "utilities"]
+# Groups with fixed, scheduled, recurring flows worth detecting. "income"
+# captures the monthly salary (Wise, last working day of the month) — the
+# largest and most regular flow, which dominates the deterministic backbone.
+RECURRING_GROUPS = ["income", "subscriptions", "utilities"]
 
 
 @dataclass

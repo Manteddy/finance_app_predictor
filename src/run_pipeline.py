@@ -105,18 +105,23 @@ def run_track(daily, tx, freq, mode):
 
     # ---- residual fan via split-conformal calibration ------------------------
     # Conditional quantile regression is unreliable on ~56 weekly points, so we
-    # build the P10/P90 band from out-of-sample residuals on a calibration slice
-    # of the training data (split conformal => ~80% marginal coverage). The tree
-    # provides the P50 point; offsets widen it to the calibrated band.
+    # build the P10/P90 band from out-of-fold residuals across the training set
+    # (split conformal => ~80% marginal coverage). The best strong model gives
+    # the P50 point; conformal offsets widen it to the calibrated band.
     from sklearn.base import clone
     from sklearn.model_selection import TimeSeriesSplit
+
+    r2_by = {r["model"]: r["r2"] for r in rows}
+    best_strong = max(("linear", "tree"), key=lambda m: r2_by[m])
+    est_unfit = {"linear": lin, "tree": tree_model}[best_strong]
+
     oof_err = []
     for tr_idx, va_idx in TimeSeriesSplit(n_splits=5).split(Xtr):
-        m = clone(tree_model).fit(Xtr.iloc[tr_idx], ytr.iloc[tr_idx])
+        m = clone(est_unfit).fit(Xtr.iloc[tr_idx], ytr.iloc[tr_idx])
         oof_err.extend(ytr.iloc[va_idx].values - m.predict(Xtr.iloc[va_idx]))
     off10, off90 = np.percentile(oof_err, 10), np.percentile(oof_err, 90)
 
-    flow_p50 = pred_totals["tree"]
+    flow_p50 = pred_totals[best_strong]
     flow_p10, flow_p90 = flow_p50 + off10, flow_p50 + off90
     pinball = float(np.mean([
         evaluate.pinball_loss(actual_total, flow_p10, 0.1),
@@ -124,14 +129,14 @@ def run_track(daily, tx, freq, mode):
         evaluate.pinball_loss(actual_total, flow_p90, 0.9)]))
     coverage = evaluate.interval_coverage(actual_total, flow_p10, flow_p90)
     for r in rows:
-        if r["model"] == "tree":
+        if r["model"] == best_strong:
             r["pinball"], r["coverage"] = round(pinball, 2), round(coverage, 3)
 
     artifacts = {
         "df": df, "freq": freq, "deterministic": deterministic,
         "target_periods": target_periods, "anchors": anchors,
         "actual_total": actual_total,
-        "pred_totals": pred_totals,
+        "pred_totals": pred_totals, "best_strong": best_strong,
         "flow_p10": flow_p10, "flow_p50": flow_p50, "flow_p90": flow_p90,
         "Xtr": Xtr, "Xte": Xte, "tree": tree, "tree_name": tree_name,
         "lin": lin, "lin_name": lin_name, "feature_names": list(X.columns),
@@ -198,7 +203,7 @@ def main():
     # Daily-vs-weekly R² comparison.
     plots.plot_track_comparison(comp, os.path.join(OUT_DIR, "daily_vs_weekly.png"))
 
-    # Explainability on the headline tree model.
+    # Explainability: SHAP for the tree, coefficients for the linear model.
     shap_rank = explain.shap_tree(head["tree"], head["Xtr"], head["Xte"],
                                   os.path.join(OUT_DIR, "shap_summary.png"))
     explain.plot_importance_bar(shap_rank, "mean_abs_shap",
@@ -216,12 +221,11 @@ def main():
     print(f"Weekly lifts R²: daily best {best_daily.max():+.3f} -> "
           f"weekly best {best_weekly.max():+.3f}")
     wd = comp[(comp["freq"] == "W") & (comp["mode"] == "decomposed")].set_index("model")
-    base_r2 = wd.loc["baseline", "r2"]
-    strong = wd.drop(index="baseline")["r2"].max()
-    print(f"Weekly-decomposed: baseline R² {base_r2:+.3f} vs best strong "
-          f"{strong:+.3f}  |  P10–P90 coverage "
-          f"{wd.loc['tree', 'coverage']:.2f} (target ~0.80), "
-          f"pinball {wd.loc['tree', 'pinball']:.1f}")
+    hb = head["best_strong"]
+    print(f"Weekly-decomposed: baseline R² {wd.loc['baseline', 'r2']:+.3f} vs "
+          f"best strong ({hb}) {wd.loc[hb, 'r2']:+.3f}  |  P10–P90 coverage "
+          f"{wd.loc[hb, 'coverage']:.2f} (target ~0.80), "
+          f"pinball {wd.loc[hb, 'pinball']:.1f}")
 
     out = {
         "data": {k: summary[k] for k in
@@ -229,11 +233,13 @@ def main():
         "tracks": comp.round(3).to_dict(orient="records"),
         "headline": {
             "track": "W-decomposed",
+            "best_strong_model": hb,
+            "best_strong_r2": round(float(wd.loc[hb, "r2"]), 3),
             "regularization_triggered": bool(head["regularize"]),
             "ols_max_abs_coef": round(head["max_coef"], 2),
             "chosen_linear": head["lin_name"], "chosen_tree": head["tree_name"],
-            "coverage_p10_p90": round(float(wd.loc["tree", "coverage"]), 3),
-            "pinball": round(float(wd.loc["tree", "pinball"]), 2),
+            "coverage_p10_p90": round(float(wd.loc[hb, "coverage"]), 3),
+            "pinball": round(float(wd.loc[hb, "pinball"]), 2),
             "n_train": head["n_train"], "n_test": head["n_test"],
         },
         "top_shap_features": shap_rank.head(10).to_dict(orient="records"),

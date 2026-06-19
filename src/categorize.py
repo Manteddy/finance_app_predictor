@@ -119,6 +119,12 @@ def categorize(counterparty: str, details: str, amount: float) -> str:
     """
     text = f"{counterparty or ''} || {details or ''}".upper()
 
+    # Incoming Wise transfers are this client's monthly salary (paid via Wise on
+    # the last working day of each month); outgoing Wise is a genuine transfer.
+    # This must run before the generic "WISE -> transfer" keyword rule below.
+    if amount > 0 and "WISE PAYMENTS" in text:
+        return "income"
+
     for group, keywords in _RULES:
         if any(kw in text for kw in keywords):
             return group

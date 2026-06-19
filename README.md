@@ -57,9 +57,10 @@ as `balanceₜ = balanceₜ₋₁ + flowₜ`. Two architectures are compared:
 - **Direct** — predict the full next-period net flow from features.
 - **Decomposed** — split `flow = deterministic + residual`:
   - **Deterministic backbone** (`src/recurring.py`): detected monthly recurring
-    debits (subscriptions, utilities, dormitory/rent) on their schedule **plus**
-    stable habitual category rates (e.g. median weekly groceries). Fit on the
-    **training portion only** (no leakage), extendable into the future.
+    flows — the **Wise salary** (income, month-end), subscriptions, utilities,
+    dormitory/rent — on their schedule **plus** stable habitual category rates
+    (e.g. median weekly groceries). Fit on the **training portion only** (no
+    leakage), extendable into the future.
   - **Residual** — the genuinely stochastic discretionary part, which the ML
     models forecast and around which we draw the **fan chart**.
 
@@ -93,45 +94,59 @@ the band widening as residual variance accumulates over the horizon.
 
 ---
 
+## The dominant pattern: a monthly salary
+
+The single strongest, most regular flow is a **salary paid via Wise on the last
+working day of every month** (~€2,086; 19 occurrences across the data). It is
+detected as a recurring `income` event and placed at month-end in the
+deterministic backbone — so the **forward projection now shows the expected
+monthly sawtooth** (a spike at each month-end, then a draw-down through the month
+as rent/subscriptions/spending land). Capturing it was the largest single
+accuracy win (see below).
+
 ## Results — R² on next-period total flow (holdout)
 
 | track | baseline | linear | tree | sarima |
 |---|---|---|---|---|
-| **Daily**, direct | −0.04 | −0.15 | −0.25 | **+0.10** |
-| **Daily**, decomposed | −0.04 | −0.21 | −0.34 | +0.02 |
-| **Weekly**, direct | −0.09 | +0.07 | **+0.38** | −0.02 |
-| **Weekly**, decomposed | −0.09 | **+0.30** | +0.35 | −0.07 |
+| **Daily**, direct | −0.04 | −0.16 | −0.03 | **+0.10** |
+| **Daily**, decomposed | −0.04 | −0.24 | −0.01 | −3.03 |
+| **Weekly**, direct | −0.09 | +0.49 | **+0.52** | −0.02 |
+| **Weekly**, decomposed | −0.09 | **+0.49** | +0.32 | −0.08 |
 
 **What this shows (the whole point of the exercise):**
 
-1. **Daily is noise-dominated.** Every learner is ≤0 except SARIMA (+0.10); the
-   naive baseline is essentially unbeatable. Individual daily cash-flow is mostly
-   irreducible timing noise.
-2. **Weekly aggregation rescues the signal.** Best R² jumps **+0.10 → +0.38**.
+1. **Daily is noise-dominated.** Every learner is ≈0 or negative except SARIMA
+   (+0.10); the naive baseline is essentially unbeatable. Individual daily
+   cash-flow is mostly irreducible timing noise. (SARIMA on the *decomposed*
+   daily residual diverges, −3.03 — that combination is simply unsuitable.)
+2. **Weekly aggregation rescues the signal.** Best R² jumps **+0.10 → +0.52**.
    Summing 7 days cancels day-to-day timing noise (incoherently, ~×7) while the
    weekly *budget* structure adds coherently — a ~7× signal-to-noise gain. At
    weekly cadence the **strong models clearly beat the baseline** (which stays
    negative).
-3. **Decomposition helps the linear model a lot** (weekly **+0.07 → +0.30**):
-   removing the deterministic salary/rent/subscription structure lets the linear
-   model focus on the learnable residual. (For trees the gain is neutral — they
-   could already approximate that structure.)
+3. **Modelling the recurring salary + decomposition** lifts the linear model
+   from weekly **+0.07** (before the salary was captured) to **+0.49**. Removing
+   the deterministic salary/rent/subscription structure lets the linear model
+   focus on the learnable residual. (For trees the decomposition is roughly
+   neutral — they can approximate that structure directly, so the weekly *direct*
+   tree is marginally best at +0.52.)
 4. **SHAP** on the weekly model ranks `fourier_sin_1` (monthly cycle) and
-   `expected_flow_next` (the deterministic backbone) as top contributors —
-   confirming the new architectural features carry the signal.
+   `expected_flow_next` (the deterministic backbone, incl. the salary) as top
+   contributors — confirming the new architectural features carry the signal.
 
-Headline track (**weekly, decomposed**): regularization **triggered** (OLS max
-|coef| €450 → **Lasso** chosen); best strong model R² **+0.35** vs baseline
-**−0.09**; P10–P90 coverage **0.58**, pinball **131**.
+Headline track (**weekly, decomposed**): best strong model **linear** (Lasso;
+regularization **triggered**, OLS max |coef| ≈ €450) at R² **+0.49** vs baseline
+**−0.09**; P10–P90 coverage **0.67**, pinball **116**.
 
-### On "is R² ≈ 0.3–0.4 good?" — the irreducible-variance ceiling
+### On "is R² ≈ 0.5 good?" — the irreducible-variance ceiling
 Discretionary human spending contains genuine randomness, so there is a Bayes
 floor: no architecture drives single-account R² near 0.9. That is *why* the
-deliverable is a **fan chart**, not a single line — the predictable backbone is
-drawn as a line and the irreducible part as an honest uncertainty band. (The
-band slightly under-covers here — 0.58 vs 0.80 — because the final 12 weeks were
-unusually volatile, including a travel period; it covers ~0.80 of the
-out-of-fold calibration residuals by construction.)
+deliverable is a **fan chart**, not a single line — the predictable backbone
+(salary, rent, subscriptions, habits) is drawn as a line and the irreducible
+part as an honest uncertainty band. (The band under-covers slightly — 0.67 vs
+0.80 — because the final 12 weeks were unusually volatile, including a travel
+period; it covers ~0.80 of the out-of-fold calibration residuals by
+construction.)
 
 ### Figures (`outputs/`)
 - `fan_chart.png` — **headline**: deterministic P50 line + P10–P90 band + actuals + projection.

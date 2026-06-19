@@ -27,11 +27,11 @@
       "freq": "D",
       "mode": "direct",
       "model": "linear",
-      "rmse": 265.653,
-      "mae": 210.762,
-      "r2": -0.153,
-      "balance_rmse": 265.653,
-      "balance_mae": 210.762,
+      "rmse": 266.663,
+      "mae": 209.22,
+      "r2": -0.162,
+      "balance_rmse": 266.663,
+      "balance_mae": 209.22,
       "pinball": NaN,
       "coverage": NaN
     },
@@ -40,13 +40,13 @@
       "freq": "D",
       "mode": "direct",
       "model": "tree",
-      "rmse": 276.933,
-      "mae": 190.148,
-      "r2": -0.253,
-      "balance_rmse": 276.933,
-      "balance_mae": 190.148,
-      "pinball": 66.76,
-      "coverage": 0.583
+      "rmse": 251.051,
+      "mae": 161.646,
+      "r2": -0.03,
+      "balance_rmse": 251.051,
+      "balance_mae": 161.646,
+      "pinball": 54.12,
+      "coverage": 0.783
     },
     {
       "track": "D-direct",
@@ -79,11 +79,11 @@
       "freq": "D",
       "mode": "decomposed",
       "model": "linear",
-      "rmse": 272.097,
-      "mae": 215.928,
-      "r2": -0.21,
-      "balance_rmse": 272.097,
-      "balance_mae": 215.928,
+      "rmse": 274.992,
+      "mae": 200.994,
+      "r2": -0.236,
+      "balance_rmse": 274.992,
+      "balance_mae": 200.994,
       "pinball": NaN,
       "coverage": NaN
     },
@@ -92,24 +92,24 @@
       "freq": "D",
       "mode": "decomposed",
       "model": "tree",
-      "rmse": 286.823,
-      "mae": 200.287,
-      "r2": -0.344,
-      "balance_rmse": 286.823,
-      "balance_mae": 200.287,
-      "pinball": 70.69,
-      "coverage": 0.65
+      "rmse": 248.908,
+      "mae": 156.018,
+      "r2": -0.012,
+      "balance_rmse": 248.908,
+      "balance_mae": 156.018,
+      "pinball": 54.49,
+      "coverage": 0.817
     },
     {
       "track": "D-decomposed",
       "freq": "D",
       "mode": "decomposed",
       "model": "sarima",
-      "rmse": 245.226,
-      "mae": 140.467,
-      "r2": 0.017,
-      "balance_rmse": 245.226,
-      "balance_mae": 140.467,
+      "rmse": 496.415,
+      "mae": 221.908,
+      "r2": -3.026,
+      "balance_rmse": 496.415,
+      "balance_mae": 221.908,
       "pinball": NaN,
       "coverage": NaN
     },
@@ -131,11 +131,11 @@
       "freq": "W",
       "mode": "direct",
       "model": "linear",
-      "rmse": 646.398,
-      "mae": 540.254,
-      "r2": 0.071,
-      "balance_rmse": 646.398,
-      "balance_mae": 540.254,
+      "rmse": 480.928,
+      "mae": 371.352,
+      "r2": 0.486,
+      "balance_rmse": 480.928,
+      "balance_mae": 371.352,
       "pinball": NaN,
       "coverage": NaN
     },
@@ -144,12 +144,12 @@
       "freq": "W",
       "mode": "direct",
       "model": "tree",
-      "rmse": 528.496,
-      "mae": 364.966,
-      "r2": 0.379,
-      "balance_rmse": 528.496,
-      "balance_mae": 364.966,
-      "pinball": 127.22,
+      "rmse": 463.003,
+      "mae": 313.112,
+      "r2": 0.523,
+      "balance_rmse": 463.003,
+      "balance_mae": 313.112,
+      "pinball": 111.27,
       "coverage": 0.667
     },
     {
@@ -183,92 +183,94 @@
       "freq": "W",
       "mode": "decomposed",
       "model": "linear",
-      "rmse": 561.779,
-      "mae": 387.61,
-      "r2": 0.298,
-      "balance_rmse": 561.779,
-      "balance_mae": 387.61,
-      "pinball": NaN,
-      "coverage": NaN
+      "rmse": 476.875,
+      "mae": 335.892,
+      "r2": 0.494,
+      "balance_rmse": 476.875,
+      "balance_mae": 335.892,
+      "pinball": 115.88,
+      "coverage": 0.667
     },
     {
       "track": "W-decomposed",
       "freq": "W",
       "mode": "decomposed",
       "model": "tree",
-      "rmse": 541.892,
-      "mae": 365.892,
-      "r2": 0.347,
-      "balance_rmse": 541.892,
-      "balance_mae": 365.892,
-      "pinball": 131.1,
-      "coverage": 0.583
+      "rmse": 551.409,
+      "mae": 357.836,
+      "r2": 0.324,
+      "balance_rmse": 551.409,
+      "balance_mae": 357.836,
+      "pinball": NaN,
+      "coverage": NaN
     },
     {
       "track": "W-decomposed",
       "freq": "W",
       "mode": "decomposed",
       "model": "sarima",
-      "rmse": 694.142,
-      "mae": 415.376,
-      "r2": -0.071,
-      "balance_rmse": 694.142,
-      "balance_mae": 415.376,
+      "rmse": 696.596,
+      "mae": 514.067,
+      "r2": -0.079,
+      "balance_rmse": 696.596,
+      "balance_mae": 514.067,
       "pinball": NaN,
       "coverage": NaN
     }
   ],
   "headline": {
     "track": "W-decomposed",
+    "best_strong_model": "linear",
+    "best_strong_r2": 0.494,
     "regularization_triggered": true,
-    "ols_max_abs_coef": 449.79,
+    "ols_max_abs_coef": 860.73,
     "chosen_linear": "linear_lasso",
     "chosen_tree": "gradient_boosting",
-    "coverage_p10_p90": 0.583,
-    "pinball": 131.1,
+    "coverage_p10_p90": 0.667,
+    "pinball": 115.88,
     "n_train": 58,
     "n_test": 12
   },
   "top_shap_features": [
     {
-      "feature": "fourier_sin_1",
-      "mean_abs_shap": 104.04986655108637
-    },
-    {
       "feature": "expected_flow_next",
-      "mean_abs_shap": 64.79463464513212
+      "mean_abs_shap": 480.31879170768
     },
     {
-      "feature": "savings_roll12",
-      "mean_abs_shap": 59.72043026917811
+      "feature": "nf_lag_2",
+      "mean_abs_shap": 52.971047482177774
     },
     {
       "feature": "nf_roll_sum_12",
-      "mean_abs_shap": 45.217841908326825
+      "mean_abs_shap": 39.588482643691634
     },
     {
       "feature": "nf_roll_mean_12",
-      "mean_abs_shap": 40.37613829751654
-    },
-    {
-      "feature": "expected_flow",
-      "mean_abs_shap": 40.36837144236383
+      "mean_abs_shap": 37.4909138673818
     },
     {
       "feature": "nf_roll_mean_8",
-      "mean_abs_shap": 36.95184835701982
+      "mean_abs_shap": 31.51982946627712
     },
     {
       "feature": "nf_roll_sum_8",
-      "mean_abs_shap": 35.25967121202046
+      "mean_abs_shap": 28.477668259130507
     },
     {
-      "feature": "shopping_roll4",
-      "mean_abs_shap": 26.583542962586844
+      "feature": "income_roll12",
+      "mean_abs_shap": 24.498824819782197
     },
     {
-      "feature": "nf_roll_std_12",
-      "mean_abs_shap": 25.712680595427358
+      "feature": "fourier_cos_1",
+      "mean_abs_shap": 23.390602063334285
+    },
+    {
+      "feature": "savings_roll12",
+      "mean_abs_shap": 20.409438217760094
+    },
+    {
+      "feature": "fourier_sin_2",
+      "mean_abs_shap": 19.845979573814923
     }
   ]
 }
