@@ -46,11 +46,18 @@ def run_track(daily, tx, freq, mode):
     n_test = TEST_PERIODS[freq]
     cutoff = df.index[-n_test]                     # first test period (train < cutoff)
 
-    decomposed = mode == "decomposed"
+    decomposed = mode in ("decomposed", "decomp_agnostic")
     deterministic = None
     if decomposed:
-        rules = recurring.detect_recurring(tx, cutoff)
-        habitual = recurring.habitual_rates(daily, cutoff, freq)
+        if mode == "decomp_agnostic":
+            # Recurrence-FIRST: detect periodic merchants across all categories,
+            # then compute habitual on the non-recurring remainder.
+            rules = recurring.detect_recurring_agnostic(tx, cutoff)
+            rec_keys = {r.key for r in rules}
+            habitual = recurring.habitual_rates_excluding(tx, rec_keys, cutoff, freq)
+        else:
+            rules = recurring.detect_recurring(tx, cutoff)
+            habitual = recurring.habitual_rates(daily, cutoff, freq)
         # Deterministic backbone over history + future horizon.
         future_idx = pd.date_range(df.index[-1], periods=HORIZON[freq] + 1,
                                    freq=freq)[1:]
@@ -114,6 +121,7 @@ def run_track(daily, tx, freq, mode):
     r2_by = {r["model"]: r["r2"] for r in rows}
     best_strong = max(("linear", "tree"), key=lambda m: r2_by[m])
     est_unfit = {"linear": lin, "tree": tree_model}[best_strong]
+    best_model = {"linear": lin, "tree": tree}[best_strong]
 
     oof_err = []
     for tr_idx, va_idx in TimeSeriesSplit(n_splits=5).split(Xtr):
@@ -133,10 +141,12 @@ def run_track(daily, tx, freq, mode):
             r["pinball"], r["coverage"] = round(pinball, 2), round(coverage, 3)
 
     artifacts = {
-        "df": df, "freq": freq, "deterministic": deterministic,
+        "df": df, "freq": freq, "mode": mode, "decomposed": decomposed,
+        "deterministic": deterministic, "rules": rules if decomposed else [],
         "target_periods": target_periods, "anchors": anchors,
         "actual_total": actual_total,
         "pred_totals": pred_totals, "best_strong": best_strong,
+        "best_model": best_model, "oof_err": np.asarray(oof_err),
         "flow_p10": flow_p10, "flow_p50": flow_p50, "flow_p90": flow_p90,
         "Xtr": Xtr, "Xte": Xte, "tree": tree, "tree_name": tree_name,
         "lin": lin, "lin_name": lin_name, "feature_names": list(X.columns),
@@ -160,7 +170,7 @@ def main():
 
     all_rows, artifacts = [], {}
     for freq in ("D", "W"):
-        for mode in ("direct", "decomposed"):
+        for mode in ("direct", "decomposed", "decomp_agnostic"):
             rows, art = run_track(daily, tx, freq, mode)
             all_rows.extend(rows)
             artifacts[(freq, mode)] = art
@@ -172,27 +182,48 @@ def main():
     show = comp[["track", "model", "rmse", "mae", "r2", "balance_rmse"]].copy()
     print(show.round(2).to_string(index=False))
 
-    # Headline track: weekly decomposed.
-    head = artifacts[("W", "decomposed")]
+    # Show how the recurrence-first architecture captures rent (point 1/2).
+    ag = artifacts[("W", "decomp_agnostic")]["rules"]
+    print("\nRecurrence-first (agnostic) housing/loan rules detected:")
+    for r in sorted(ag, key=lambda x: abs(x.amount), reverse=True)[:6]:
+        print(f"  {r.key:26s} {r.amount:+9.1f}/{r.cadence[:2]}  n={r.n} ({r.group})")
+
+    # Headline: best decomposed-family weekly track (it carries the backbone the
+    # fan chart needs). Compares the original vs recurrence-first architecture.
+    wfam = comp[(comp["freq"] == "W")
+                & (comp["mode"].isin(["decomposed", "decomp_agnostic"]))]
+    best_row = wfam.loc[wfam["r2"].idxmax()]
+    head = artifacts[("W", best_row["mode"])]
     freq = head["freq"]
     det = head["deterministic"]
-    future_idx = det.index[det.index > head["df"].index[-1]]
-    det_future = det.loc[future_idx]
-    sigma_resid = float(np.std(head["actual_total"] - head["flow_p50"]))
     last_balance = head["df"]["end_balance"].iloc[-1]
-    # Historical mean residual (= typical net of irregular income the
-    # deterministic backbone omits) anchors the projection's central line.
-    resid_hist = head["df"]["net_flow"] - det.reindex(head["df"].index)
-    drift = float(resid_hist.dropna().mean())
-    projection = plots.project_fan(det_future, last_balance, sigma_resid,
-                                   HORIZON[freq], drift=drift)
+    last_date = head["df"].index[-1]
+    sigma_resid = float(np.std(head["actual_total"] - head["flow_p50"]))
+
+    # Recursive, model-driven projection (week-level texture) + gradient bands.
+    proj_p50 = plots.project_recursive(
+        head["best_model"], head["df"], freq, det, HORIZON[freq],
+        head["decomposed"], last_balance)
+    projection_df = plots.build_projection_bands(
+        proj_p50, sigma_resid, last_date, last_balance)
+
+    # Holdout gradient bands from out-of-fold conformal residuals.
+    anchors, p50_flow = head["anchors"], head["flow_p50"]
+    oof = head["oof_err"]
+    p50_bal = anchors + p50_flow
+    actual_bal = anchors + head["actual_total"]
+    holdout_bands = []
+    for lv in sorted(plots.FAN_LEVELS, reverse=True):
+        lo = np.percentile(oof, (1 - lv) / 2 * 100)
+        hi = np.percentile(oof, (1 + lv) / 2 * 100)
+        holdout_bands.append((p50_bal + lo, p50_bal + hi))
 
     hist = head["df"].iloc[-(head["n_test"] + 26):][["end_balance"]]
     plots.plot_fan_chart(
-        head["target_periods"], head["anchors"], head["actual_total"],
-        head["flow_p10"], head["flow_p50"], head["flow_p90"], projection,
+        head["target_periods"], actual_bal, p50_bal, holdout_bands, projection_df,
         os.path.join(OUT_DIR, "fan_chart.png"), history_tail=hist,
-        title="Weekly balance forecast — deterministic line + P10–P90 fan")
+        title=f"Weekly balance forecast ({head['mode']}, {head['best_strong']}) "
+              f"— gradient fan")
 
     # Multi-model holdout comparison (weekly decomposed).
     plots.plot_balance_forecast(
@@ -216,30 +247,42 @@ def main():
 
     # ---- narrative summary -------------------------------------------------
     print("\n" + "-" * 72)
-    best_daily = comp[comp["freq"] == "D"].set_index(["mode", "model"])["r2"]
-    best_weekly = comp[comp["freq"] == "W"].set_index(["mode", "model"])["r2"]
-    print(f"Weekly lifts R²: daily best {best_daily.max():+.3f} -> "
-          f"weekly best {best_weekly.max():+.3f}")
-    wd = comp[(comp["freq"] == "W") & (comp["mode"] == "decomposed")].set_index("model")
+    best_daily = comp[comp["freq"] == "D"]["r2"].max()
+    best_weekly = comp[comp["freq"] == "W"]["r2"].max()
+    print(f"Weekly lifts R²: daily best {best_daily:+.3f} -> "
+          f"weekly best {best_weekly:+.3f}")
+
+    def track_best(mode):
+        t = comp[(comp["freq"] == "W") & (comp["mode"] == mode)
+                 & (comp["model"] != "baseline")]
+        return t["r2"].max()
+    print(f"Architecture A/B (weekly, best strong R²): "
+          f"category-gated decomposed {track_best('decomposed'):+.3f}  vs  "
+          f"recurrence-first agnostic {track_best('decomp_agnostic'):+.3f}")
+
     hb = head["best_strong"]
-    print(f"Weekly-decomposed: baseline R² {wd.loc['baseline', 'r2']:+.3f} vs "
-          f"best strong ({hb}) {wd.loc[hb, 'r2']:+.3f}  |  P10–P90 coverage "
-          f"{wd.loc[hb, 'coverage']:.2f} (target ~0.80), "
-          f"pinball {wd.loc[hb, 'pinball']:.1f}")
+    hrow = comp[(comp["track"] == f"W-{head['mode']}") & (comp["model"] == hb)].iloc[0]
+    print(f"Headline (W-{head['mode']}, {hb}): R² {hrow['r2']:+.3f}, "
+          f"P10–P90 coverage {hrow['coverage']:.2f} (target ~0.80), "
+          f"pinball {hrow['pinball']:.1f}")
 
     out = {
         "data": {k: summary[k] for k in
                  ("n_transactions", "n_days", "date_range", "final_balance")},
         "tracks": comp.round(3).to_dict(orient="records"),
+        "architecture_ab_weekly": {
+            "category_gated_decomposed_r2": round(float(track_best("decomposed")), 3),
+            "recurrence_first_agnostic_r2": round(float(track_best("decomp_agnostic")), 3),
+        },
         "headline": {
-            "track": "W-decomposed",
+            "track": f"W-{head['mode']}",
             "best_strong_model": hb,
-            "best_strong_r2": round(float(wd.loc[hb, "r2"]), 3),
+            "best_strong_r2": round(float(hrow["r2"]), 3),
             "regularization_triggered": bool(head["regularize"]),
             "ols_max_abs_coef": round(head["max_coef"], 2),
             "chosen_linear": head["lin_name"], "chosen_tree": head["tree_name"],
-            "coverage_p10_p90": round(float(wd.loc[hb, "coverage"]), 3),
-            "pinball": round(float(wd.loc[hb, "pinball"]), 2),
+            "coverage_p10_p90": round(float(hrow["coverage"]), 3),
+            "pinball": round(float(hrow["pinball"]), 2),
             "n_train": head["n_train"], "n_test": head["n_test"],
         },
         "top_shap_features": shap_rank.head(10).to_dict(orient="records"),

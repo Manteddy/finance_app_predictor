@@ -60,7 +60,10 @@ as `balanceₜ = balanceₜ₋₁ + flowₜ`. Two architectures are compared:
     flows — the **Wise salary** (income, month-end), subscriptions, utilities,
     dormitory/rent — on their schedule **plus** stable habitual category rates
     (e.g. median weekly groceries). Fit on the **training portion only** (no
-    leakage), extendable into the future.
+    leakage), extendable into the future. Two detection strategies are compared:
+    **category-gated** (`detect_recurring`, scans income/subscriptions/utilities)
+    and **recurrence-first / agnostic** (`detect_recurring_agnostic`, groups *all*
+    merchants then finds periodicity — see the A/B below).
   - **Residual** — the genuinely stochastic discretionary part, which the ML
     models forecast and around which we draw the **fan chart**.
 
@@ -86,11 +89,14 @@ Probabilistic quality is scored with **pinball loss** and **P10–P90 interval
 coverage**.
 
 ### Fan chart (`src/plots.py`)
-The P10–P90 band uses **split-conformal calibration** (out-of-fold residuals
+The uncertainty band uses **split-conformal calibration** (out-of-fold residuals
 across the training set) rather than fragile conditional quantile regression —
-appropriate for small data. The forward projection's central line follows the
-deterministic backbone plus the historical mean residual (typical income), with
-the band widening as residual variance accumulates over the horizon.
+appropriate for small data. It is rendered as a **gradient** of nested central
+intervals (50→95%), darker near the P50 line. The forward projection is a
+**recursive, model-driven** forecast (so it carries week-level texture from
+lags/Fourier, not just a flat monthly sawtooth), and it **starts exactly where
+the actual line ends** (an anchor point joins the two); the band widens as
+residual variance accumulates over the horizon.
 
 ---
 
@@ -104,14 +110,42 @@ monthly sawtooth** (a spike at each month-end, then a draw-down through the mont
 as rent/subscriptions/spending land). Capturing it was the largest single
 accuracy win (see below).
 
+## Rent: is it captured correctly?
+
+Originally **no**. The landlord `MARIKA LAOS` was **split across two categories**
+by a keyword quirk (details containing "utilities" → `utilities`, rent-only →
+`transfer`), so the category-gated detector saw only 3 of 9 payments and used
+**−€310/mo**. The true picture: rent **€700/mo for two roommates** (the user's
+share ≈ €350) **+ €85–310 utilities**, paid on shifting mid-month dates, with
+roommate **Bohdan reimbursing ≈ +€250/mo**. The recurrence-first detector
+(below) groups the landlord correctly and recovers **−€700/mo**. But note: the
+amount genuinely **varies €85–1070** month to month, so even the corrected rule
+is only an approximation — the variable part stays in the stochastic residual.
+
+## Architecture A/B: category-first vs recurrence-first
+
+The recurrence-first (agnostic) detector is **more universal** — grouping all
+merchants first surfaces the full landlord payment, the **gym** (€19/mo ×17), the
+**dormitory**, **SportsDirect**, etc., regardless of category. **But it forecasts
+slightly worse**: weekly best-strong R² **+0.43 (agnostic) vs +0.49
+(category-gated)**. Why: variable-amount / variable-date items like rent (€85–
+1070, paid the 12th–20th) are poorly represented by a single fixed deterministic
+value, so they inject phase/amplitude noise into the residual. The disciplined
+category-gated backbone (only clean, fixed recurrences — salary, subscriptions,
+dormitory) yields cleaner residuals. **Lesson: more complete detection ≠ better
+forecasting; only *stably* deterministic patterns belong in the backbone.** The
+agnostic scan is still valuable as a discovery tool (it correctly found the rent).
+
 ## Results — R² on next-period total flow (holdout)
 
 | track | baseline | linear | tree | sarima |
 |---|---|---|---|---|
 | **Daily**, direct | −0.04 | −0.16 | −0.03 | **+0.10** |
 | **Daily**, decomposed | −0.04 | −0.24 | −0.01 | −3.03 |
+| **Daily**, agnostic | −0.04 | −0.23 | 0.00 | −3.30 |
 | **Weekly**, direct | −0.09 | +0.49 | **+0.52** | −0.02 |
 | **Weekly**, decomposed | −0.09 | **+0.49** | +0.32 | −0.08 |
+| **Weekly**, agnostic | −0.09 | +0.43 | +0.20 | −0.38 |
 
 **What this shows (the whole point of the exercise):**
 
@@ -149,8 +183,9 @@ period; it covers ~0.80 of the out-of-fold calibration residuals by
 construction.)
 
 ### Figures (`outputs/`)
-- `fan_chart.png` — **headline**: deterministic P50 line + P10–P90 band + actuals + projection.
-- `daily_vs_weekly.png` — R² by model across all four tracks.
+- `fan_chart.png` — **headline**: P50 line + **gradient** uncertainty fan + actuals,
+  with a connected, recursive forward projection.
+- `daily_vs_weekly.png` — R² by model across all six tracks (y clipped at −0.7).
 - `balance_forecast.png` — weekly multi-model holdout comparison.
 - `shap_summary.png`, `shap_bar.png`, `linear_coefficients.png`, `metrics.{json,csv}`.
 
