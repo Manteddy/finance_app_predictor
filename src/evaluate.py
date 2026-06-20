@@ -27,6 +27,20 @@ def flow_metrics(y_true, y_pred) -> dict:
     }
 
 
+def mase(y_true, y_pred, y_train) -> float:
+    """Mean Absolute Scaled Error — the right metric for comparing forecasts
+    across heterogeneous accounts of different sizes.
+
+    = MAE(forecast) / MAE(in-sample 1-step naive random walk on y_train).
+    Scale-free; MASE < 1 means the forecast beats the naive baseline.
+    """
+    y_train = np.asarray(y_train, dtype=float)
+    scale = np.mean(np.abs(np.diff(y_train))) if len(y_train) > 1 else 0.0
+    if scale < 1e-9:
+        scale = np.mean(np.abs(y_train)) or 1.0
+    return float(mean_absolute_error(y_true, y_pred) / scale)
+
+
 def pinball_loss(y_true, q_pred, alpha) -> float:
     """Average pinball (quantile) loss — the proper score for a quantile."""
     y_true = np.asarray(y_true, dtype=float)

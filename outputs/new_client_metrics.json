@@ -1,0 +1,48 @@
+{
+  "n_clients": 60,
+  "best_model": "random_forest",
+  "tuned": {
+    "linear": {
+      "alpha": 100.0
+    },
+    "random_forest": {
+      "n_estimators": 100,
+      "max_depth": null,
+      "min_samples_leaf": 20
+    },
+    "boosted_trees": {
+      "n_estimators": 200,
+      "max_depth": 3,
+      "learning_rate": 0.05
+    }
+  },
+  "metrics": {
+    "baseline": {
+      "median_mase": 0.982,
+      "pct_beats_naive": 53.3,
+      "median_r2": -1.783
+    },
+    "sarima": {
+      "median_mase": 0.529,
+      "pct_beats_naive": 93.3,
+      "median_r2": 0.044
+    },
+    "linear": {
+      "median_mase": 0.454,
+      "pct_beats_naive": 95.0,
+      "median_r2": 0.29
+    },
+    "random_forest": {
+      "median_mase": 0.376,
+      "pct_beats_naive": 95.0,
+      "median_r2": 0.405
+    },
+    "boosted_trees": {
+      "median_mase": 0.405,
+      "pct_beats_naive": 93.3,
+      "median_r2": 0.355
+    },
+    "_best_coverage": 0.75
+  },
+  "example_account": "10652"
+}

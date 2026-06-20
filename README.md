@@ -112,6 +112,37 @@ client, longer history), detailed in **[REPORT.md](REPORT.md)**.
 
 ---
 
+## New-client forecasting benchmark (Berka)
+
+Can the model forecast a **brand-new client's** finances accumulation from that
+client's own history? `src/new_client.py` (`python -m src.new_client`) holds out
+**60 whole accounts** as new clients (no overlap with the 300 training accounts)
+and compares four model families + a naïve baseline.
+
+**Metric — why MASE:** across accounts of wildly different sizes, RMSE/R² aren't
+comparable, so the primary metric is **MASE** (Mean Absolute Scaled Error =
+forecast MAE ÷ naïve-forecast MAE; **scale-free; <1 beats naïve**). The
+global ML models (linear/RF/GB) are trained *only* on the train accounts and
+applied **zero-shot** to each new client's own features; SARIMA + baseline are
+per-series. Each model's capacity is tuned for the best **performance-to-time**
+(e.g. RF picked **100 trees** over 300 for identical MASE at ⅓ the cost).
+
+| model | median MASE ↓ | % beats naïve | median R² |
+|---|---|---|---|
+| baseline (naïve random walk) | 0.98 | 53% | −1.78 |
+| SARIMA (per-series) | 0.53 | 93% | 0.04 |
+| linear (global) | 0.45 | 95% | 0.29 |
+| **random forest (global)** | **0.38** | **95%** | **0.41** |
+| boosted trees (global) | 0.41 | 93% | 0.36 |
+
+**Result:** **Random Forest wins** (median MASE **0.38** — ~60% below naïve —
+beating naïve on **95% of unseen clients**), with adaptive-conformal P10–P90
+coverage **0.75**. Notably the **global zero-shot** models beat the per-series
+SARIMA: cross-account structure transfers to new clients. `python -m
+src.new_client` writes `outputs/new_client_benchmark.png` and a worked example,
+`outputs/new_client_example.png` — a *randomly chosen* held-out client the model
+never trained on, with its balance forecast + gradient fan + forward projection.
+
 ## Real-data validation across 4,500 accounts (Berka panel)
 
 The model's biggest drawback was being trained on **one** account — so we
@@ -253,6 +284,7 @@ src/
   plots.py          # fan chart, track comparison, holdout comparison
   berka.py          # loader for the real Berka multi-account panel
   cross_account.py  # cross-account generalisation eval (per-account + leave-accounts-out)
+  new_client.py     # new-client benchmark: 4 families + baseline, MASE, worked example
   run_pipeline.py   # orchestrate the daily/weekly x direct/decomposed grid
 REPORT.md           # data strategy: narrowing the fan + cross-client generalisation
 data/raw/           # the two source statements (committed for reproducibility)
