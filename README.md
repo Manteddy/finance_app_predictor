@@ -112,6 +112,36 @@ client, longer history), detailed in **[REPORT.md](REPORT.md)**.
 
 ---
 
+## Real-data validation across 4,500 accounts (Berka panel)
+
+The model's biggest drawback was being trained on **one** account — so we
+validated it on the **real PKDD'99 "Berka" Czech-bank panel** (~4,500 accounts,
+~1.06M transactions, with a running balance per transaction). `src/berka.py`
+maps it into our schema; `src/cross_account.py` runs two regimes on 250 real
+accounts (`python -m src.cross_account`). (Of the three real datasets researched,
+only Berka is both a balance-bearing *panel* and retrievable; MoneyData is tiny
+single-account and MBD has no balance — see [REPORT.md](REPORT.md).)
+
+| regime | R² (weekly net-flow) |
+|---|---|
+| Estonian single account (this repo's headline) | **+0.49** |
+| Berka **per-account** (median of 250), ridge | **+0.36** (IQR −0.04…+0.56; **72% of accounts > 0**) |
+| Berka **global, leave-accounts-out**, ridge | **+0.30** on *unseen* accounts |
+| Berka **global, leave-accounts-out**, GradientBoosting | **+0.37** on *unseen* accounts |
+
+**The performance change / key result:** the approach **generalises**. A single
+global model trained on some accounts forecasts **completely unseen accounts at
+R² +0.37** (GroupKFold by account — no account leakage), and the per-account
+method beats the naive baseline (median **−0.15**, 0% positive) on **~70% of real
+accounts**. The adaptive-conformal band stays calibrated out-of-the-box across
+accounts (**median P10–P90 coverage 0.83**). The Estonian account (+0.49) sits on
+the *higher* end of the real distribution, so **+0.36 median is the more honest
+expectation** for a typical account. See `outputs/berka_generalization.png`.
+
+Caveats: Berka is 1990s Czech data (dnoeth mirror; dates shifted +20 yr, amounts
+intact), a different category taxonomy, research-use licence — so the takeaway is
+the **generalisation result**, not a like-for-like accuracy number.
+
 ## The dominant pattern: a monthly salary
 
 The single strongest, most regular flow is a **salary paid via Wise on the last
@@ -221,6 +251,8 @@ src/
   evaluate.py       # temporal split, point + probabilistic metrics
   explain.py        # SHAP + standardized coefficients
   plots.py          # fan chart, track comparison, holdout comparison
+  berka.py          # loader for the real Berka multi-account panel
+  cross_account.py  # cross-account generalisation eval (per-account + leave-accounts-out)
   run_pipeline.py   # orchestrate the daily/weekly x direct/decomposed grid
 REPORT.md           # data strategy: narrowing the fan + cross-client generalisation
 data/raw/           # the two source statements (committed for reproducibility)

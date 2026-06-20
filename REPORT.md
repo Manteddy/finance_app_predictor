@@ -26,7 +26,7 @@ with better data, not a cleverer estimator.
 
 ## Data to prioritise (ranked)
 
-### 1. Panel data — many clients (the decisive lever)
+### 1. Panel data — many clients (the decisive lever) — NOW VALIDATED
 Hundreds–thousands of accounts with the same schema. This is the single most
 important acquisition. It enables:
 - a **global model with per-client effects** (hierarchical / mixed-effects, or a
@@ -34,6 +34,24 @@ important acquisition. It enables:
   shrinks the irreducible-looking variance of any one account;
 - **cold-start** for new clients from population priors;
 - the only valid measure of universality — **leave-clients-out** evaluation.
+
+**We tested this empirically** on the real **Berka panel** (~4,500 accounts; see
+`src/cross_account.py`, README "Real-data validation"). Result: a single global
+model forecasts **unseen accounts at R² +0.37** (leave-accounts-out), and the
+per-account method beats the baseline on **~70% of 250 real accounts** (median
+R² +0.36) with conformal coverage **0.83**. So the panel-data lever is confirmed:
+the method generalises across clients — the remaining need is *scale + breadth*
+(more clients, modern data, all-accounts-per-client) rather than a new method.
+
+The public datasets we found (and why most don't suffice):
+- **Berka / PKDD'99** — real, ~4,500-account panel **with running balances**;
+  the only public real panel that fits. Research-use licence; 1990s Czech data.
+- **MoneyData/MoneyVis** — real, has balance, but ~single account (too small).
+- **MBD (Sber)** — real, 1.5M clients, but **no balance**, scaled, corporate.
+- **Synthetic** (IBM TabFormer, Sparkov, PaySim) — either no balance, or
+  artificial balance dynamics; useful only to *augment*, not to ground truth.
+- **Yodlee/Envestnet, Smart Data Foundry** — real consumer panels but
+  **commercial / safe-haven only** (partnership required, not downloadable).
 
 ### 2. All accounts per client (current + savings + credit card)
 Directly fixes the width problem in finding #2: internal transfers and savings

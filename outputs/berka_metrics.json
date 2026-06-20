@@ -1,0 +1,35 @@
+{
+  "n_accounts_evaluated": 250,
+  "estonian_single_account_r2": 0.49,
+  "per_account": {
+    "r2_baseline": {
+      "median": -0.154,
+      "iqr": [
+        -0.186,
+        -0.132
+      ],
+      "pct_positive": 0.4
+    },
+    "r2_ridge": {
+      "median": 0.358,
+      "iqr": [
+        -0.036,
+        0.557
+      ],
+      "pct_positive": 72.0
+    },
+    "r2_tree": {
+      "median": 0.309,
+      "iqr": [
+        -0.081,
+        0.579
+      ],
+      "pct_positive": 70.0
+    }
+  },
+  "per_account_coverage_median": 0.833,
+  "global_leave_accounts_out_r2": {
+    "ridge": 0.3,
+    "grad_boost": 0.371
+  }
+}
