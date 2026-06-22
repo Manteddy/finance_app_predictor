@@ -43,6 +43,18 @@ R² +0.36) with conformal coverage **0.83**. So the panel-data lever is confirme
 the method generalises across clients — the remaining need is *scale + breadth*
 (more clients, modern data, all-accounts-per-client) rather than a new method.
 
+**Breadth beats depth — cold-start beats fine-tuning (measured).** We also asked
+the inverse question: instead of more clients, would *fine-tuning on one client's
+own history* help? On the 60 held-out new clients, **warm-starting** the global RF
+(retraining on the client, growing +50 client-specific trees, or blending in a
+per-client Ridge) was **worse on MASE than the zero-shot cold start** (0.388–0.483
+vs **0.376**) at **2.3–4.8× the compute** — the blend even down-weighted the local
+model to w≈0.9 (README "Cold-start vs warm-start"). The lesson reinforces the
+ranking below: a single client's ~50 weeks is too thin to fine-tune on, so the
+decisive investment is **breadth across clients (panel data)**, not depth per
+client. Warm-starting only becomes attractive once each client has *years* of
+history (lever #4) and *all* their accounts (lever #2).
+
 The public datasets we found (and why most don't suffice):
 - **Berka / PKDD'99** — real, ~4,500-account panel **with running balances**;
   the only public real panel that fits. Research-use licence; 1990s Czech data.

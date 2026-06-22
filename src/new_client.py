@@ -17,6 +17,7 @@ Run:  python -m src.new_client
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import time
@@ -30,7 +31,7 @@ from sklearn.base import clone
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error
-from sklearn.model_selection import GroupKFold
+from sklearn.model_selection import GroupKFold, TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -223,6 +224,9 @@ def main():
               f"pinball median {np.median(pin):.1f}")
         summary["_best_coverage"] = round(float(np.median(cov)), 3)
 
+    # ---- cold-start vs warm-start (fine-tuning) cost/benefit ---------------
+    warm = warmstart_comparison(by, usable, globals_["random_forest"])
+
     # ---- worked example on a random held-out client ------------------------
     example_id = str(RNG.choice(usable))
     _example_fan(by[example_id], globals_.get(best), best,
@@ -231,7 +235,7 @@ def main():
     out = {"n_clients": len(usable), "best_model": best,
            "tuned": {"linear": li_knee["cfg"], "random_forest": rf_knee["cfg"],
                      "boosted_trees": gb_knee["cfg"]},
-           "metrics": summary, "example_account": example_id}
+           "metrics": summary, "warmstart": warm, "example_account": example_id}
     with open(os.path.join(OUT_DIR, "new_client_metrics.json"), "w") as f:
         json.dump(out, f, indent=2, default=str)
 
@@ -239,6 +243,173 @@ def main():
     print(f"\nSaved new_client_metrics.json, new_client_benchmark.png, "
           f"new_client_example.png (account {example_id})")
     return out
+
+
+# --------------------------------------------------------------------------- #
+# cold-start vs warm-start (fine-tuning the global model on the client)
+# --------------------------------------------------------------------------- #
+WARM_EXTRA_TREES = 50          # trees appended on the client's own data
+WARM_RIDGE_ALPHA = 10.0        # per-client linear model (regularised for tiny n)
+
+
+def _blend_weight(g_tr, Xa, ya):
+    """Pick w for  w*global + (1-w)*client_ridge  by 3-fold TimeSeriesSplit on
+    the client's own training data (out-of-fold, so the weight does not overfit).
+    Returns (w, ridge_fit_on_all_Xa)."""
+    n = len(Xa)
+    oof_client = np.full(n, np.nan)
+    tscv = TimeSeriesSplit(n_splits=min(3, max(2, n // 12)))
+    for tr, va in tscv.split(Xa):
+        rg = Pipeline([("s", StandardScaler()),
+                       ("m", Ridge(alpha=WARM_RIDGE_ALPHA))]).fit(Xa.iloc[tr], ya[tr])
+        oof_client[va] = rg.predict(Xa.iloc[va])
+    mask = ~np.isnan(oof_client)
+    best_w, best_mae = 1.0, np.inf
+    if mask.sum() >= 3:
+        for w in np.linspace(0.0, 1.0, 11):
+            blend = w * g_tr[mask] + (1 - w) * oof_client[mask]
+            mae = mean_absolute_error(ya[mask], blend)
+            if mae < best_mae:
+                best_mae, best_w = mae, float(w)
+    ridge_full = Pipeline([("s", StandardScaler()),
+                           ("m", Ridge(alpha=WARM_RIDGE_ALPHA))]).fit(Xa, ya)
+    return best_w, ridge_full
+
+
+def warmstart_comparison(by, usable, global_rf):
+    """Compare cold-start (global RF zero-shot) against three warm-start
+    (per-client fine-tuning) strategies, on the SAME held-out clients and the
+    SAME holdout weeks. Reports the performance lift vs the per-client cost.
+
+      * cold        - global RF, predict only (no per-client fit).
+      * client_only - a fresh Ridge trained on the client's own history (no
+                      transfer): tests whether transfer helps at all.
+      * warm_rf     - the global RF's trees are kept and WARM_EXTRA_TREES more
+                      are grown on the client's data (sklearn warm_start) - the
+                      tree-ensemble analogue of fine-tuning.
+      * blended     - global RF frozen, blended with a small per-client Ridge at
+                      a weight learned out-of-fold (the cheapest adaptation).
+    """
+    strategies = ["cold", "client_only", "warm_rf", "blended"]
+    res = {s: {"mase": [], "r2": [], "ms": []} for s in strategies}
+    blend_ws = []
+
+    for aid in usable:
+        r = account_frame(by[aid])
+        if r is None:
+            continue
+        X, y, frame, df = r
+        (Xa, ya, fa), (Xte, yte, fte) = evaluate.temporal_split(
+            X, y, frame, test_days=TEST_WEEKS)
+        ya = np.asarray(ya, dtype=float)
+        ytrue = fte["total_next"].values
+        scale_ref = fa["net_flow"].values
+
+        def _record(name, pred, ms):
+            res[name]["mase"].append(evaluate.mase(ytrue, pred, scale_ref))
+            res[name]["r2"].append(evaluate.flow_metrics(ytrue, pred)["r2"])
+            res[name]["ms"].append(ms * 1e3)
+
+        # 1. COLD: global model, predict only (no per-client fitting).
+        t0 = time.perf_counter()
+        p_cold = global_rf.predict(Xte)
+        _record("cold", p_cold, time.perf_counter() - t0)
+
+        # 2. CLIENT-ONLY: fresh Ridge on the client's own data (no transfer).
+        t0 = time.perf_counter()
+        rg = Pipeline([("s", StandardScaler()),
+                       ("m", Ridge(alpha=WARM_RIDGE_ALPHA))]).fit(Xa, ya)
+        p_local = rg.predict(Xte)
+        _record("client_only", p_local, time.perf_counter() - t0)
+
+        # 3. WARM RF: keep the global trees, grow extra trees on client data.
+        #    deepcopy preserves the fitted ensemble; clone() would reset it.
+        t0 = time.perf_counter()
+        warm = copy.deepcopy(global_rf)
+        warm.warm_start = True
+        warm.n_estimators = warm.n_estimators + WARM_EXTRA_TREES
+        warm.fit(Xa, ya)
+        p_warm = warm.predict(Xte)
+        _record("warm_rf", p_warm, time.perf_counter() - t0)
+
+        # 4. BLENDED: frozen global RF + small per-client Ridge, weight learned
+        #    out-of-fold on the client's own training data.
+        t0 = time.perf_counter()
+        g_tr = global_rf.predict(Xa)
+        w, ridge_full = _blend_weight(g_tr, Xa, ya)
+        p_blend = w * p_cold + (1 - w) * ridge_full.predict(Xte)
+        _record("blended", p_blend, time.perf_counter() - t0)
+        blend_ws.append(w)
+
+    # ---- aggregate ---------------------------------------------------------
+    print(f"\n{'='*70}\nCOLD-START vs WARM-START  (n={len(res['cold']['mase'])} clients)\n{'='*70}")
+    print(f"{'strategy':14s} {'median MASE':>12s} {'%beats naive':>13s} "
+          f"{'median R2':>10s} {'ms/client':>10s} {'p90 ms':>9s}")
+    cold_mase = float(np.nanmedian(res["cold"]["mase"]))
+    cold_ms = float(np.median(res["cold"]["ms"]))
+    summary = {}
+    for s in strategies:
+        mase = np.array(res[s]["mase"], dtype=float)
+        med = float(np.nanmedian(mase))
+        beat = float(np.mean(mase < 1.0) * 100)
+        r2 = float(np.nanmedian(res[s]["r2"]))
+        ms = float(np.median(res[s]["ms"]))
+        p90 = float(np.percentile(res[s]["ms"], 90))
+        d_mase = (med - cold_mase) / cold_mase * 100 if s != "cold" else 0.0
+        d_ms = ms / cold_ms if cold_ms > 0 else float("inf")
+        summary[s] = {"median_mase": round(med, 3), "pct_beats_naive": round(beat, 1),
+                      "median_r2": round(r2, 3), "median_ms": round(ms, 3),
+                      "p90_ms": round(p90, 3),
+                      "mase_vs_cold_pct": round(d_mase, 1),
+                      "cost_x_vs_cold": round(d_ms, 1)}
+        print(f"{s:14s} {med:12.3f} {beat:12.0f}% {r2:10.3f} {ms:10.2f} {p90:9.2f}")
+
+    print(f"\nReference (cold-start): median MASE {cold_mase:.3f}, "
+          f"{cold_ms*1e3:.0f} µs/client (predict only).")
+    print("Warm-start lift vs cost:")
+    for s in strategies[1:]:
+        sm = summary[s]
+        verdict = "better" if sm["mase_vs_cold_pct"] < 0 else "worse"
+        print(f"  {s:12s}: MASE {sm['median_mase']:.3f} "
+              f"({sm['mase_vs_cold_pct']:+.1f}% vs cold = {verdict}) "
+              f"at {sm['cost_x_vs_cold']:.1f}x cost "
+              f"({sm['median_ms']-cold_ms:+.1f} ms/client)")
+    summary["_cold_ref_ms"] = round(cold_ms, 4)
+    summary["_median_blend_weight"] = round(float(np.median(blend_ws)), 2) if blend_ws else None
+
+    _warmstart_plot(summary, strategies, os.path.join(OUT_DIR, "warmstart_comparison.png"))
+    print("Saved warmstart_comparison.png")
+    return summary
+
+
+def _warmstart_plot(summary, strategies, path):
+    labels = {"cold": "cold\n(zero-shot)", "client_only": "client-only\n(Ridge)",
+              "warm_rf": "warm RF\n(+50 trees)", "blended": "blended\n(global+Ridge)"}
+    names = [labels[s] for s in strategies]
+    mases = [summary[s]["median_mase"] for s in strategies]
+    costs = [max(summary[s]["median_ms"], 1e-3) for s in strategies]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    cold_mase = summary["cold"]["median_mase"]
+    colors = ["0.6"] + ["tab:blue"] * (len(strategies) - 1)
+    ax1.bar(names, mases, color=colors)
+    ax1.axhline(cold_mase, color="tab:green", ls="--", lw=1, label="cold-start MASE")
+    ax1.axhline(1.0, color="tab:red", ls=":", lw=1, label="naive (MASE=1)")
+    for i, v in enumerate(mases):
+        ax1.text(i, v + 0.005, f"{v:.3f}", ha="center", fontsize=9)
+    ax1.set_ylabel("median MASE  (lower = better)")
+    ax1.set_title("Performance")
+    ax1.legend(fontsize=8)
+
+    ax2.bar(names, costs, color=colors)
+    ax2.set_yscale("log")
+    ax2.set_ylabel("median compute per client (ms, log scale)")
+    ax2.set_title("Cost")
+    for i, v in enumerate(costs):
+        ax2.text(i, v * 1.1, f"{v:.2f}", ha="center", fontsize=9)
+    fig.suptitle("Cold-start vs warm-start (fine-tuning) — Berka new clients",
+                 fontsize=13)
+    fig.tight_layout(); fig.savefig(path, dpi=120); plt.close(fig)
 
 
 def _example_fan(rows, model, best_name, spec, aid):

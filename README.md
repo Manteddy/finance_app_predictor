@@ -143,6 +143,48 @@ src.new_client` writes `outputs/new_client_benchmark.png` and a worked example,
 `outputs/new_client_example.png` — a *randomly chosen* held-out client the model
 never trained on, with its balance forecast + gradient fan + forward projection.
 
+### Cold-start vs warm-start: is fine-tuning on the client worth the cost?
+
+The benchmark above uses the global RF **zero-shot** — a **cold start** (no
+per-client fitting, just `predict`). The natural follow-up: would **fine-tuning**
+the model on each new client's *own* pre-holdout history (a **warm start**) pay
+off? `src/new_client.py` (`warmstart_comparison`) measures three warm-start
+strategies against cold-start on the **same 60 held-out clients / same holdout
+weeks**, reporting both the MASE change and the per-client compute cost:
+
+- **client-only** — a fresh Ridge trained on *only* the client's ~50 weeks (no
+  transfer; tests whether the population model helps at all).
+- **warm RF** — keep the global RF's 100 trees and grow **+50 more on the
+  client's data** (sklearn `warm_start`; the tree-ensemble analogue of fine-tuning).
+- **blended** — freeze the global RF, mix it with a small per-client Ridge at a
+  weight learned **out-of-fold** (the lightest adaptation).
+
+| strategy | median MASE ↓ | Δ vs cold | % beats naïve | median R² | cost/client | vs cold |
+|---|---|---|---|---|---|---|
+| **cold (zero-shot)** | **0.376** | — | 95% | 0.405 | **24 ms** (predict only) | 1× |
+| client-only (Ridge) | 0.483 | **+28%** | 97% | 0.206 | 4 ms | 0.2× |
+| warm RF (+50 trees) | 0.388 | +3% | 97% | 0.451 | 115 ms | 4.8× |
+| blended (global+Ridge) | 0.394 | +5% | 97% | 0.411 | 57 ms | 2.3× |
+
+**Result: cold-start wins — fine-tuning is not worth it here.** Every warm-start
+variant is **worse on the headline metric (MASE)**: the **client-only** model
+collapses (**+28%**, R² halves) because ~50 weekly points are far too few to learn
+a client from scratch; **warm RF** and **blended** add only client-specific noise
+for **2.3–4.8× the compute** and still lose 3–5%. Tellingly, the blend's
+optimal weight lands at **w≈0.9** — it *chooses* to lean almost entirely on the
+global model and barely use the per-client one. The cross-account structure the global model
+already learned dominates whatever a single short history can add. (Two honest
+nuances: warm RF nudges median **R² up** (0.45 vs 0.41) and all warm variants beat
+naïve on marginally more clients (97% vs 95%) — but not enough to overturn the
+MASE verdict or justify the cost.)
+
+**Takeaway:** deploy the **global model zero-shot** for new clients — it is both
+cheaper (one `predict`, no per-client training pipeline) *and* more accurate. This
+mirrors the data-strategy finding: the lever is **breadth across clients**, not
+depth on any one client (see [REPORT.md](REPORT.md)). `python -m src.new_client`
+writes `outputs/warmstart_comparison.png` (performance vs cost) and a `"warmstart"`
+block in `outputs/new_client_metrics.json`.
+
 ## Real-data validation across 4,500 accounts (Berka panel)
 
 The model's biggest drawback was being trained on **one** account — so we
