@@ -1,0 +1,395 @@
+{
+  "data": {
+    "n_transactions": 3552,
+    "n_days": 565,
+    "date_range": [
+      "2024-12-01",
+      "2026-06-18"
+    ],
+    "final_balance": 206.37
+  },
+  "tracks": [
+    {
+      "track": "D-direct",
+      "freq": "D",
+      "mode": "direct",
+      "model": "baseline",
+      "rmse": 252.127,
+      "mae": 131.384,
+      "r2": -0.039,
+      "balance_rmse": 252.127,
+      "balance_mae": 131.384,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "D-direct",
+      "freq": "D",
+      "mode": "direct",
+      "model": "linear",
+      "rmse": 266.663,
+      "mae": 209.22,
+      "r2": -0.162,
+      "balance_rmse": 266.663,
+      "balance_mae": 209.22,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "D-direct",
+      "freq": "D",
+      "mode": "direct",
+      "model": "tree",
+      "rmse": 251.051,
+      "mae": 161.646,
+      "r2": -0.03,
+      "balance_rmse": 251.051,
+      "balance_mae": 161.646,
+      "pinball": 54.12,
+      "coverage": 0.783
+    },
+    {
+      "track": "D-direct",
+      "freq": "D",
+      "mode": "direct",
+      "model": "sarima",
+      "rmse": 235.272,
+      "mae": 124.758,
+      "r2": 0.096,
+      "balance_rmse": 235.272,
+      "balance_mae": 124.758,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "D-decomposed",
+      "freq": "D",
+      "mode": "decomposed",
+      "model": "baseline",
+      "rmse": 252.127,
+      "mae": 131.384,
+      "r2": -0.039,
+      "balance_rmse": 252.127,
+      "balance_mae": 131.384,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "D-decomposed",
+      "freq": "D",
+      "mode": "decomposed",
+      "model": "linear",
+      "rmse": 274.992,
+      "mae": 200.994,
+      "r2": -0.236,
+      "balance_rmse": 274.992,
+      "balance_mae": 200.994,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "D-decomposed",
+      "freq": "D",
+      "mode": "decomposed",
+      "model": "tree",
+      "rmse": 248.908,
+      "mae": 156.018,
+      "r2": -0.012,
+      "balance_rmse": 248.908,
+      "balance_mae": 156.018,
+      "pinball": 54.49,
+      "coverage": 0.817
+    },
+    {
+      "track": "D-decomposed",
+      "freq": "D",
+      "mode": "decomposed",
+      "model": "sarima",
+      "rmse": 496.415,
+      "mae": 221.908,
+      "r2": -3.026,
+      "balance_rmse": 496.415,
+      "balance_mae": 221.908,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "D-decomp_agnostic",
+      "freq": "D",
+      "mode": "decomp_agnostic",
+      "model": "baseline",
+      "rmse": 252.127,
+      "mae": 131.384,
+      "r2": -0.039,
+      "balance_rmse": 252.127,
+      "balance_mae": 131.384,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "D-decomp_agnostic",
+      "freq": "D",
+      "mode": "decomp_agnostic",
+      "model": "linear",
+      "rmse": 274.49,
+      "mae": 199.989,
+      "r2": -0.231,
+      "balance_rmse": 274.49,
+      "balance_mae": 199.989,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "D-decomp_agnostic",
+      "freq": "D",
+      "mode": "decomp_agnostic",
+      "model": "tree",
+      "rmse": 247.383,
+      "mae": 153.291,
+      "r2": 0.0,
+      "balance_rmse": 247.383,
+      "balance_mae": 153.291,
+      "pinball": 53.87,
+      "coverage": 0.817
+    },
+    {
+      "track": "D-decomp_agnostic",
+      "freq": "D",
+      "mode": "decomp_agnostic",
+      "model": "sarima",
+      "rmse": 512.917,
+      "mae": 231.28,
+      "r2": -3.299,
+      "balance_rmse": 512.917,
+      "balance_mae": 231.28,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "W-direct",
+      "freq": "W",
+      "mode": "direct",
+      "model": "baseline",
+      "rmse": 700.27,
+      "mae": 416.197,
+      "r2": -0.09,
+      "balance_rmse": 700.27,
+      "balance_mae": 416.197,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "W-direct",
+      "freq": "W",
+      "mode": "direct",
+      "model": "linear",
+      "rmse": 480.928,
+      "mae": 371.352,
+      "r2": 0.486,
+      "balance_rmse": 480.928,
+      "balance_mae": 371.352,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "W-direct",
+      "freq": "W",
+      "mode": "direct",
+      "model": "tree",
+      "rmse": 463.003,
+      "mae": 313.112,
+      "r2": 0.523,
+      "balance_rmse": 463.003,
+      "balance_mae": 313.112,
+      "pinball": 111.27,
+      "coverage": 0.667
+    },
+    {
+      "track": "W-direct",
+      "freq": "W",
+      "mode": "direct",
+      "model": "sarima",
+      "rmse": 677.488,
+      "mae": 375.253,
+      "r2": -0.02,
+      "balance_rmse": 677.488,
+      "balance_mae": 375.253,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "W-decomposed",
+      "freq": "W",
+      "mode": "decomposed",
+      "model": "baseline",
+      "rmse": 700.27,
+      "mae": 416.197,
+      "r2": -0.09,
+      "balance_rmse": 700.27,
+      "balance_mae": 416.197,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "W-decomposed",
+      "freq": "W",
+      "mode": "decomposed",
+      "model": "linear",
+      "rmse": 476.875,
+      "mae": 335.892,
+      "r2": 0.494,
+      "balance_rmse": 476.875,
+      "balance_mae": 335.892,
+      "pinball": 115.88,
+      "coverage": 0.667
+    },
+    {
+      "track": "W-decomposed",
+      "freq": "W",
+      "mode": "decomposed",
+      "model": "tree",
+      "rmse": 551.409,
+      "mae": 357.836,
+      "r2": 0.324,
+      "balance_rmse": 551.409,
+      "balance_mae": 357.836,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "W-decomposed",
+      "freq": "W",
+      "mode": "decomposed",
+      "model": "sarima",
+      "rmse": 696.596,
+      "mae": 514.067,
+      "r2": -0.079,
+      "balance_rmse": 696.596,
+      "balance_mae": 514.067,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "W-decomp_agnostic",
+      "freq": "W",
+      "mode": "decomp_agnostic",
+      "model": "baseline",
+      "rmse": 700.27,
+      "mae": 416.197,
+      "r2": -0.09,
+      "balance_rmse": 700.27,
+      "balance_mae": 416.197,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "W-decomp_agnostic",
+      "freq": "W",
+      "mode": "decomp_agnostic",
+      "model": "linear",
+      "rmse": 505.443,
+      "mae": 367.975,
+      "r2": 0.432,
+      "balance_rmse": 505.443,
+      "balance_mae": 367.975,
+      "pinball": 129.94,
+      "coverage": 0.667
+    },
+    {
+      "track": "W-decomp_agnostic",
+      "freq": "W",
+      "mode": "decomp_agnostic",
+      "model": "tree",
+      "rmse": 599.195,
+      "mae": 406.48,
+      "r2": 0.202,
+      "balance_rmse": 599.195,
+      "balance_mae": 406.48,
+      "pinball": NaN,
+      "coverage": NaN
+    },
+    {
+      "track": "W-decomp_agnostic",
+      "freq": "W",
+      "mode": "decomp_agnostic",
+      "model": "sarima",
+      "rmse": 787.326,
+      "mae": 560.489,
+      "r2": -0.378,
+      "balance_rmse": 787.326,
+      "balance_mae": 560.489,
+      "pinball": NaN,
+      "coverage": NaN
+    }
+  ],
+  "architecture_ab_weekly": {
+    "category_gated_decomposed_r2": 0.494,
+    "recurrence_first_agnostic_r2": 0.432
+  },
+  "headline": {
+    "track": "W-decomposed",
+    "best_strong_model": "linear",
+    "best_strong_r2": 0.494,
+    "regularization_triggered": true,
+    "ols_max_abs_coef": 860.73,
+    "chosen_linear": "linear_lasso",
+    "chosen_tree": "gradient_boosting",
+    "coverage_p10_p90": 0.667,
+    "pinball": 115.88,
+    "n_train": 58,
+    "n_test": 12
+  },
+  "fan_width_eur": {
+    "old_broken_p10_p90": 1046.6,
+    "old_coverage": 0.667,
+    "new_calm_week": 1122.3,
+    "new_median": 1602.9,
+    "new_volatile_week": 1968.7,
+    "new_coverage": 0.917,
+    "method": "prequential calibration + bounded adaptive conformal",
+    "point_model": "linear",
+    "note": "routing own-account flows out was tried but backfires (compensatory)"
+  },
+  "top_shap_features": [
+    {
+      "feature": "expected_flow_next",
+      "mean_abs_shap": 480.31879170768
+    },
+    {
+      "feature": "nf_lag_2",
+      "mean_abs_shap": 52.971047482177774
+    },
+    {
+      "feature": "nf_roll_sum_12",
+      "mean_abs_shap": 39.588482643691634
+    },
+    {
+      "feature": "nf_roll_mean_12",
+      "mean_abs_shap": 37.4909138673818
+    },
+    {
+      "feature": "nf_roll_mean_8",
+      "mean_abs_shap": 31.51982946627712
+    },
+    {
+      "feature": "nf_roll_sum_8",
+      "mean_abs_shap": 28.477668259130507
+    },
+    {
+      "feature": "income_roll12",
+      "mean_abs_shap": 24.498824819782197
+    },
+    {
+      "feature": "fourier_cos_1",
+      "mean_abs_shap": 23.390602063334285
+    },
+    {
+      "feature": "savings_roll12",
+      "mean_abs_shap": 20.409438217760094
+    },
+    {
+      "feature": "fourier_sin_2",
+      "mean_abs_shap": 19.845979573814923
+    }
+  ]
+}
